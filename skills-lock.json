@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "skills": {
+    "macos-development": {
+      "source": "rshankras/claude-code-apple-skills",
+      "sourceType": "github",
+      "skillPath": "skills/macos/SKILL.md",
+      "computedHash": "bc649f9fef44b2984623f461d2bfb1a73a522a63a0c824623e71a16bc6c59ff4"
+    },
+    "macos-native": {
+      "source": "travisjneuman/.claude",
+      "sourceType": "github",
+      "skillPath": "skills/macos-native/SKILL.md",
+      "computedHash": "c5213c334bc81dae8fce92ab7b0bb78e5648ffa24feaeb31c83deb7f6fe8b836"
+    },
+    "conventional-commit": {
+      "source": "cmd-llm/cllm",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/conventional-commit/SKILL.md",
+      "computedHash": "ae8e148c27f3e8e0f6e5bdc27b522bec6466dfebb3be74c7eb357619953aec6e"
+    }
+  }
+}

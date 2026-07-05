@@ -88,6 +88,8 @@ Verify both directions pass 4.5:1 contrast for any text drawn in the accent colo
 
 Note the brand accent is also green — for transfer status specifically, keep `systemGreen` for "success/complete" states so it reads as a system-standard status color rather than "the app's brand color happens to be showing," and reserve `AccentColor.primary` for interactive/selection UI.
 
+**Provenance note:** early visual prototypes (`docs/design/LocalSend macOS.dc.html`) used a brighter placeholder green, `#2E7D46`, for every accent/interactive surface. That color never shipped — it doesn't match the brand mark (`Assets/Logo/localdrop-mark-color.svg`, stroke `#426834`) and isn't part of this scale. `Primary/500` (`#426834`) is the only accent color; don't copy hex values out of the prototype file.
+
 ## Typography
 
 Apple HIG: use the system font (San Francisco) via Dynamic Type text styles, not fixed point sizes — this gets accessibility text-size scaling for free.
@@ -149,6 +151,27 @@ HIG replaces drop-shadow "elevation" with translucent materials (`NSVisualEffect
 | Drag-and-drop active overlay | `.hudWindow`-style vibrancy over the drop target, tinted with `Primary/50` (light) / `Primary/900` (dark) at low opacity |
 
 Respect `NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency` — fall back to a solid `windowBackgroundColor` when the user has reduced transparency enabled.
+
+## Components
+
+Screen layouts live in the app target; this section specs the recurring pieces so every screen builds them the same way. Prefer the native control named in parentheses over a custom view — build custom only where noted.
+
+| Component | Composition | Sizing | Tokens |
+| --- | --- | --- | --- |
+| Sidebar nav row (`List` row, `.listStyle(.sidebar)`) | SF Symbol icon + label, leading-aligned | row height ~34pt (7pt vertical padding around 17pt icon), 8pt corner radius on selection | active bg `AccentColor.primarySubtleFill`; active icon/text `AccentColor.primary` / `labelColor`; inactive `secondaryLabelColor` |
+| "This device" chip (sidebar footer) | square icon tile + name + status dot + "Discoverable" label | pinned via `safeAreaInset(.bottom)`; icon tile 34×34pt, `radius.md` | bg `AccentColor.primarySubtleFill` at low opacity, border 0.5pt `separatorColor` |
+| Toolbar action button (`ToolbarItem`, `.buttonStyle(.bordered)`) | SF Symbol, optional trailing label | 29pt square (icon-only) or 29pt tall with `space.sm` horizontal padding (labeled) | icon tint `AccentColor.primary` or `secondaryLabelColor` depending on action |
+| Quick Save control (`Picker(.segmented)`) | 3 segments: Off / Favorites / On | native sizing | tint `AccentColor.primary` |
+| Selection-type button (Send grid) | icon + label, stacked | 4-column grid, `space.sm` gaps, `radius.lg` corners, `space.lg` vertical padding | icon `AccentColor.primary`, border `separatorColor`, hover border `AccentColor.primary` at 40% |
+| Staged-file chip | file-type icon tile + name/subtitle + remove button (`Button`, circular) | icon tile 40×40pt `radius.md`; remove button 24pt circle | bg `AccentColor.primarySubtleFill`, border `AccentColor.primary` at 14% |
+| Device card (Send grid, custom — no native list-tile primitive) | icon tile + name + subtitle, optional trailing badge | 2-column grid, `space.sm` gaps, `radius.lg` corners (13–14pt), icon tile 44×44pt `radius.md` | icon tile bg `AccentColor.primarySubtleFill`; badge bg `systemRed`-family for unread count, favorite indicator uses `heart.fill` + accent-adjacent status color |
+| History row (`List` row, custom row content) | status icon tile + filename/subtitle + trailing timestamp/status | icon tile 38×38pt `radius.md`; row padding `space.sm` vertical / `space.md` horizontal | status text `systemGreen` (completed) or `systemRed` (declined/failed) — never color-only, pair with SF Symbol per Accessibility notes |
+| Settings section (`Form { Section }.formStyle(.grouped)`) | label + trailing control per row: static value text, `Picker` (menu), `Toggle(.switch)`, disclosure `Button`, or accent-swatch row | native `Form` row sizing | section header uses `caption1`/`caption2`, uppercase, `tertiaryLabelColor` |
+| Accent-color swatch row (custom — no native equivalent) | row of filled circles, selected one gets a ring | 20pt circles, `space.xs` gaps | selection ring `AccentColor.primary` |
+| Sheet container (`.sheet(isPresented:)`) | icon/title/subtitle header + content + action row | 400pt wide, `radius.xl` (16pt) corners, centered | system sheet material — no custom fill |
+| Progress bar (`ProgressView(value:)`, linear) | bar + percent/ETA row below | 8pt height, 5pt corner radius | fill `AccentColor.primary`, track `systemGray5`/`systemGray6` |
+| Receive hero (custom — no native radar/pulse primitive) | 2 expanding pulse rings + 1 rotating dashed ring + centered brand-mark glyph tile | glyph tile 128×128pt `radius.xl`, outer rings 150–220pt | rings/dashed ring `AccentColor.primary` at low opacity; respect Reduce Motion by disabling the pulse/rotation animations |
+| Drop zone (custom, real `.dropDestination(for:)`) | dashed border + centered icon + label | `radius.lg` corners, 1.5pt dashed border | border/icon/text `AccentColor.primary`-derived, bg `AccentColor.primarySubtleFill` at very low opacity |
 
 ## Accessibility notes
 

@@ -2,21 +2,21 @@ import SwiftUI
 import DesignSystem
 
 struct ReceiveView: View {
-    @Bindable var state: TransferViewState
+    @Bindable var store: TransferFeatureStore
 
     var body: some View {
         VStack(spacing: 0) {
             ReceiveHero()
                 .frame(width: 220, height: 220)
 
-            Text(state.deviceName)
+            Text(store.deviceName)
                 .font(.system(size: 30, weight: .bold))
                 .foregroundStyle(.primary)
                 .padding(.top, Spacing.xl + Spacing.xxs)
 
             (Text("Waiting to receive · ")
                 .foregroundStyle(.secondary)
-             + Text("#\(state.waitingIdentifier)")
+             + Text("#\(store.waitingIdentifier)")
                 .foregroundStyle(AccentColor.primary))
                 .font(Typography.body.weight(.medium))
                 .padding(.top, Spacing.xxs)
@@ -28,7 +28,7 @@ struct ReceiveView: View {
                     .kerning(0.3)
                     .foregroundStyle(.secondary)
 
-                Picker("Quick Save", selection: $state.quickSave) {
+                Picker("Quick Save", selection: $store.quickSave) {
                     ForEach(QuickSaveMode.allCases) { mode in
                         Text(mode.label).tag(mode)
                     }
@@ -42,6 +42,9 @@ struct ReceiveView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(Spacing.xl)
+        .onChange(of: store.quickSave) { _, _ in
+            store.persistSettings()
+        }
     }
 }
 

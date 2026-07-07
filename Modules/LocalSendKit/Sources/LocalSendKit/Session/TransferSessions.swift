@@ -65,6 +65,7 @@ public enum UploadFileResult: Equatable, Sendable {
 public actor ReceiveSession {
     private var current: ReceiveSessionSnapshot?
     private var lastFinished: ReceiveSessionSnapshot?
+    private var pendingRequest: IncomingTransferRequest?
 
     public init() {}
 
@@ -72,22 +73,40 @@ public actor ReceiveSession {
         request: PrepareUploadRequest,
         senderIP: String,
         policy: PrepareUploadPolicy,
+        incomingRequestBridge: IncomingTransferRequestBridge? = nil,
         destinationDirectory: URL,
         sessionIdFactory: @Sendable () -> String,
         tokenFactory: @Sendable (String) -> String
-    ) throws -> PrepareUploadOutcome {
+    ) async throws -> PrepareUploadOutcome {
         guard request.files.isEmpty == false else {
             return .noTransferNeeded
         }
-        guard current == nil else {
+        guard current == nil, pendingRequest == nil else {
             return .blocked
         }
 
-        switch policy {
+        let decision: IncomingTransferDecision
+        if let incomingRequestBridge {
+            let bridgeRequest = IncomingTransferRequest(
+                senderIP: senderIP,
+                info: request.info,
+                files: request.files
+            )
+            pendingRequest = bridgeRequest
+            decision = await incomingRequestBridge.awaitDecision(for: bridgeRequest)
+            pendingRequest = nil
+            guard current == nil else {
+                return .blocked
+            }
+        } else {
+            decision = Self.decision(for: policy)
+        }
+
+        switch decision {
         case .reject:
             current = nil
             return .rejected
-        case .messageOnly:
+        case .noTransferNeeded:
             current = nil
             return .noTransferNeeded
         case .acceptAll, .acceptOnly:
@@ -95,12 +114,12 @@ public actor ReceiveSession {
         }
 
         let acceptedIDs: Set<String>
-        switch policy {
+        switch decision {
         case .acceptAll:
             acceptedIDs = Set(request.files.keys)
         case .acceptOnly(let ids):
             acceptedIDs = ids.intersection(request.files.keys)
-        case .reject, .messageOnly:
+        case .reject, .noTransferNeeded:
             acceptedIDs = []
         }
 
@@ -206,6 +225,23 @@ public actor ReceiveSession {
 
     public func snapshot() -> ReceiveSessionSnapshot? {
         current ?? lastFinished
+    }
+
+    public func pendingIncomingRequest() -> IncomingTransferRequest? {
+        pendingRequest
+    }
+
+    private static func decision(for policy: PrepareUploadPolicy) -> IncomingTransferDecision {
+        switch policy {
+        case .acceptAll:
+            return .acceptAll
+        case .reject:
+            return .reject
+        case .acceptOnly(let acceptedIDs):
+            return .acceptOnly(acceptedIDs)
+        case .messageOnly:
+            return .noTransferNeeded
+        }
     }
 
     private static func stage(body: HTTPRequestBody, to destinationURL: URL) throws {
@@ -338,5 +374,9 @@ public actor SendSession {
 
     public func snapshot(sessionId: String) -> SendSessionSnapshot? {
         sessionsByID[sessionId]
+    }
+
+    public func snapshots() -> [SendSessionSnapshot] {
+        sessionsByID.values.sorted { $0.sessionId < $1.sessionId }
     }
 }

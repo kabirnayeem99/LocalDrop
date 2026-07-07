@@ -1,40 +1,41 @@
 import SwiftUI
 import DesignSystem
 
-public struct RootView: View {
-    @State private var state = TransferViewState()
+struct RootView: View {
+    @Bindable private var store: TransferFeatureStore
 
-    public init() {}
+    init(store: TransferFeatureStore) {
+        self._store = Bindable(store)
+    }
 
-    public var body: some View {
+    var body: some View {
         NavigationSplitView {
             sidebar
         } detail: {
             detail
                 .toolbar { toolbar }
-                .navigationTitle(state.screen.title)
+                .navigationTitle(store.screen.title)
         }
-        .environment(\.appReducesMotion, state.reduceMotion)
-        .preferredColorScheme(state.appearance.colorScheme)
-        .sheet(item: $state.activeSheet) { sheet in
+        .environment(\.appReducesMotion, store.reduceMotion)
+        .preferredColorScheme(store.appearance.colorScheme)
+        .sheet(item: presentedSheet) { sheet in
             switch sheet {
-            case .incoming:
+            case .incoming(let request):
                 IncomingRequestSheet(
-                    request: .sample,
-                    onDecline: { state.activeSheet = nil },
-                    onAccept: {
-                        state.transferProgress = 0.06
-                        state.activeSheet = .progress
-                    }
+                    request: request,
+                    onDecline: { store.declineIncomingRequest() },
+                    onAccept: { store.acceptIncomingRequest() }
                 )
-            case .progress:
-                TransferProgressSheet(state: state) { state.activeSheet = nil }
+            case .progress(let progress):
+                TransferProgressSheet(progress: progress) {
+                    store.cancelActiveTransfer()
+                }
             }
         }
     }
 
     private var sidebar: some View {
-        List(selection: $state.screen) {
+        List(selection: $store.screen) {
             Section("Transfer") {
                 ForEach(Screen.allCases) { screen in
                     Label(screen.title, systemImage: screen.symbol)
@@ -48,7 +49,7 @@ public struct RootView: View {
             sidebarHeader
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            ThisDeviceChip(deviceName: state.deviceName)
+            ThisDeviceChip(deviceName: store.deviceName, statusText: store.runtimeStatusText)
                 .padding(Spacing.sm)
         }
     }
@@ -72,39 +73,81 @@ public struct RootView: View {
     }
 
     @ViewBuilder private var detail: some View {
-        switch state.screen {
-        case .receive: ReceiveView(state: state)
-        case .send: SendView(state: state)
-        case .history: HistoryView()
-        case .settings: SettingsView(state: state)
+        switch store.screen {
+        case .receive:
+            ReceiveView(store: store)
+        case .send:
+            SendView(store: store)
+        case .history:
+            HistoryView(store: store)
+        case .settings:
+            SettingsView(store: store)
         }
     }
 
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {
         ToolbarItemGroup(placement: .primaryAction) {
             Button {
-                state.activeSheet = .incoming
+                store.refreshNearbyPeers()
             } label: {
-                Label("Simulate request", systemImage: "arrow.down.circle")
+                Label("Refresh", systemImage: "arrow.clockwise")
             }
 
             Button {
-                state.screen = .history
+                store.screen = .history
             } label: {
                 Label("History", systemImage: "clock.arrow.circlepath")
             }
 
             Button {
-                state.screen = .settings
+                store.screen = .settings
             } label: {
-                Label("Info", systemImage: "info.circle")
+                Label("Settings", systemImage: "gearshape")
             }
+        }
+    }
+
+    private var presentedSheet: Binding<PresentedSheet?> {
+        Binding(
+            get: {
+                if let request = store.incomingRequest {
+                    return .incoming(request)
+                }
+                if let progress = store.activeTransfer {
+                    return .progress(progress)
+                }
+                return nil
+            },
+            set: { newValue in
+                guard newValue == nil else { return }
+                if store.incomingRequest != nil {
+                    store.declineIncomingRequest()
+                }
+                if store.activeTransfer != nil {
+                    store.dismissProgress()
+                }
+            }
+        )
+    }
+}
+
+private enum PresentedSheet: Identifiable {
+    case incoming(IncomingTransferRequest)
+    case progress(ActiveTransferProgress)
+
+    var id: String {
+        switch self {
+        case .incoming(let request):
+            return "incoming-\(request.id)"
+        case .progress(let progress):
+            return "progress-\(progress.id)"
         }
     }
 }
 
 private struct ThisDeviceChip: View {
     let deviceName: String
+    let statusText: String
 
     var body: some View {
         HStack(spacing: Spacing.xs + Spacing.xxs) {
@@ -130,7 +173,7 @@ private struct ThisDeviceChip: View {
                     Circle()
                         .fill(Color(nsColor: .systemGreen))
                         .frame(width: 6, height: 6)
-                    Text("Discoverable")
+                    Text(statusText)
                         .font(Typography.subheadline)
                         .foregroundStyle(.secondary)
                 }

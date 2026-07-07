@@ -6,9 +6,9 @@ struct DiscoveryAndSessionTests {
     @Test func multicastFiltersSelfAndPreservesReplySignal() throws {
         let message = MulticastMessage(alias: "Mac", fingerprint: "SELF", port: 53317, protocolType: .https, announce: true)
         let data = try JSONEncoder().encode(message)
-        #expect(try MulticastListener.decodeAnnouncement(data, selfFingerprint: "SELF") == nil)
+        #expect(try MulticastListener.decodeAnnouncement(data, selfFingerprint: "SELF", host: "127.0.0.1") == nil)
 
-        let other = try #require(try MulticastListener.decodeAnnouncement(data, selfFingerprint: "OTHER"))
+        let other = try #require(try MulticastListener.decodeAnnouncement(data, selfFingerprint: "OTHER", host: "127.0.0.1"))
         #expect(other.shouldReplyViaRegister == true)
     }
 

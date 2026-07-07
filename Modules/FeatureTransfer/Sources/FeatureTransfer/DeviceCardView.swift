@@ -2,7 +2,7 @@ import SwiftUI
 import DesignSystem
 
 struct DeviceCardView: View {
-    let device: Device
+    let device: NearbyPeerItem
     let action: () -> Void
 
     var body: some View {
@@ -17,28 +17,15 @@ struct DeviceCardView: View {
                                 .font(.system(size: 22, weight: .regular))
                                 .foregroundStyle(AccentColor.primary)
                         }
-
-                    if device.unreadCount > 0 {
-                        StatusBadge(count: device.unreadCount)
-                            .offset(x: 6, y: -6)
-                    }
                 }
 
                 VStack(alignment: .leading, spacing: Spacing.xxs) {
                     Text(device.name)
                         .font(Typography.headline)
                         .foregroundStyle(.primary)
-
-                    if device.isFavorite {
-                        Label("Favorite", systemImage: "heart.fill")
-                            .font(Typography.callout)
-                            .foregroundStyle(Color(nsColor: .systemPink))
-                            .labelStyle(.titleAndIcon)
-                    } else {
-                        Text(device.subtitle)
-                            .font(Typography.callout)
-                            .foregroundStyle(.secondary)
-                    }
+                    Text(device.subtitle)
+                        .font(Typography.callout)
+                        .foregroundStyle(.secondary)
                 }
                 .lineLimit(1)
 

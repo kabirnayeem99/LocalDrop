@@ -2,12 +2,12 @@ import SwiftUI
 import DesignSystem
 
 struct SettingsView: View {
-    @Bindable var state: TransferViewState
+    @Bindable var store: TransferFeatureStore
 
     var body: some View {
         Form {
             Section("General") {
-                Picker("Appearance", selection: $state.appearance) {
+                Picker("Appearance", selection: $store.appearance) {
                     ForEach(AppearanceSetting.allCases) { Text($0.label).tag($0) }
                 }
                 .pickerStyle(.menu)
@@ -16,14 +16,14 @@ struct SettingsView: View {
                     AccentSwatchRow()
                 }
 
-                Picker("Language", selection: $state.language) {
+                Picker("Language", selection: $store.language) {
                     ForEach(LanguageSetting.allCases) { Text($0.label).tag($0) }
                 }
                 .pickerStyle(.menu)
 
-                Toggle("Minimize to menu bar on close", isOn: $state.minimizeToMenuBar)
-                Toggle("Launch at login", isOn: $state.launchAtLogin)
-                Toggle("Reduce motion", isOn: $state.reduceMotion)
+                Toggle("Minimize to menu bar on close", isOn: $store.minimizeToMenuBar)
+                Toggle("Launch at login", isOn: $store.launchAtLogin)
+                Toggle("Reduce motion", isOn: $store.reduceMotion)
             }
 
             Section("Receiving") {
@@ -32,28 +32,38 @@ struct SettingsView: View {
                 } label: {
                     VStack(alignment: .leading, spacing: Spacing.xxs) {
                         Text("Save location")
-                        Text(state.saveLocation)
+                        Text(store.saveLocation)
                             .font(Typography.subheadline)
                             .foregroundStyle(.secondary)
                     }
                 }
 
-                Toggle("Require PIN for incoming", isOn: $state.requirePIN)
-                Toggle("Auto-accept from favorites", isOn: $state.autoAcceptFavorites)
+                Toggle("Require PIN for incoming", isOn: $store.requirePIN)
+                Toggle("Auto-accept from favorites", isOn: $store.autoAcceptFavorites)
             }
 
             Section("Network") {
-                LabeledContent("Device name", value: state.deviceName)
+                LabeledContent("Device name", value: store.deviceName)
                 LabeledContent("Port") {
-                    Text(state.port)
+                    Text(store.port)
                         .foregroundStyle(.secondary)
                         .monospacedStat()
                 }
-                Toggle("End-to-end encryption", isOn: $state.endToEndEncryption)
+                Toggle("Allow downloads", isOn: $store.allowDownloads)
+                Toggle("End-to-end encryption", isOn: $store.endToEndEncryption)
             }
         }
         .formStyle(.grouped)
         .tint(AccentColor.primary)
+        .onChange(of: store.appearance) { _, _ in store.persistSettings() }
+        .onChange(of: store.language) { _, _ in store.persistSettings() }
+        .onChange(of: store.minimizeToMenuBar) { _, _ in store.persistSettings() }
+        .onChange(of: store.launchAtLogin) { _, _ in store.persistSettings() }
+        .onChange(of: store.reduceMotion) { _, _ in store.persistSettings() }
+        .onChange(of: store.requirePIN) { _, _ in store.persistSettings() }
+        .onChange(of: store.autoAcceptFavorites) { _, _ in store.persistSettings() }
+        .onChange(of: store.allowDownloads) { _, _ in store.persistSettings() }
+        .onChange(of: store.endToEndEncryption) { _, _ in store.persistSettings() }
     }
 }
 

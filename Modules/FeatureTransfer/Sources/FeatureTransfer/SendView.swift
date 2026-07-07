@@ -3,7 +3,7 @@ import DesignSystem
 import UniformTypeIdentifiers
 
 struct SendView: View {
-    @Bindable var state: TransferViewState
+    @Bindable var store: TransferFeatureStore
 
     private let selectionTypes: [(symbol: String, label: String)] = [
         ("doc", "File"),
@@ -27,8 +27,8 @@ struct SendView: View {
                 }
                 .padding(.top, Spacing.sm)
 
-                if let staged = state.stagedFile {
-                    StagedFileChip(file: staged) { state.stagedFile = nil }
+                if let staged = store.stagedItems.first {
+                    StagedFileChip(file: staged) { store.removeStagedItem(id: staged.id) }
                         .padding(.top, Spacing.sm + Spacing.xxs)
                 }
 
@@ -38,11 +38,11 @@ struct SendView: View {
                         .foregroundStyle(.primary)
                     Spacer()
                     HStack(spacing: 0) {
-                        Button { } label: {
+                        Button { store.refreshNearbyPeers() } label: {
                             Image(systemName: "arrow.clockwise")
                         }
                         .help("Refresh")
-                        Button { } label: {
+                        Button { store.refreshNearbyPeers() } label: {
                             Image(systemName: "dot.radiowaves.left.and.right")
                         }
                         .help("Scan")
@@ -54,31 +54,26 @@ struct SendView: View {
                 .padding(.top, Spacing.xl + Spacing.xxs)
 
                 LazyVGrid(columns: columns, spacing: Spacing.sm) {
-                    ForEach(Device.nearby) { device in
+                    ForEach(store.nearbyPeers) { device in
                         DeviceCardView(device: device) {
-                            state.transferProgress = 0.06
-                            state.activeSheet = .progress
+                            store.send(to: device.id)
                         }
                     }
                 }
                 .padding(.top, Spacing.sm)
 
                 DropZoneView(
-                    isTargeted: state.isDropTargeted,
+                    isTargeted: false,
                     systemImage: "arrow.up.doc",
                     label: "Drag files or folders anywhere to send"
                 )
                 .frame(minHeight: 80)
                 .padding(.top, Spacing.md)
                 .dropDestination(for: URL.self) { urls, _ in
-                    guard let first = urls.first else { return false }
-                    state.stagedFile = StagedFile(
-                        name: first.lastPathComponent,
-                        subtitle: urls.count > 1 ? "\(urls.count) items ready to send" : "ready to send"
-                    )
+                    guard urls.isEmpty == false else { return false }
+                    store.stageDroppedItems(urls)
                     return true
-                } isTargeted: { targeted in
-                    state.isDropTargeted = targeted
+                } isTargeted: { _ in
                 }
             }
             .padding(.horizontal, 30)
@@ -126,7 +121,7 @@ private struct SelectionTypeButton: View {
 }
 
 private struct StagedFileChip: View {
-    let file: StagedFile
+    let file: StagedTransferItem
     let onRemove: () -> Void
 
     var body: some View {
@@ -135,7 +130,7 @@ private struct StagedFileChip: View {
                 .fill(.background)
                 .frame(width: 40, height: 40)
                 .overlay {
-                    Image(systemName: "doc.fill")
+                    Image(systemName: file.fileTypeSymbol)
                         .font(.system(size: 18))
                         .foregroundStyle(AccentColor.primary)
                 }

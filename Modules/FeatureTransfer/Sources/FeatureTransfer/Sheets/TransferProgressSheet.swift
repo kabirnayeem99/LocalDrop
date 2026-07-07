@@ -2,21 +2,21 @@ import SwiftUI
 import DesignSystem
 
 struct TransferProgressSheet: View {
-    @Bindable var state: TransferViewState
+    let progress: ActiveTransferProgress
     let onCancel: () -> Void
 
-    private var percent: Int { Int((state.transferProgress * 100).rounded()) }
+    private var percent: Int { Int((progress.progress * 100).rounded()) }
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: Spacing.sm + 1) {
-                SpinningRingIcon()
+                SpinningRingIcon(direction: progress.direction)
 
                 VStack(alignment: .leading, spacing: Spacing.xxs) {
-                    Text("Sending to \(state.transferTarget)")
+                    Text(titleText)
                         .font(Typography.title3.weight(.bold))
                         .foregroundStyle(.primary)
-                    Text("\(state.transferFileName) · \(percent)% · \(state.transferSpeed)")
+                    Text("\(progress.fileName) · \(percent)% · \(progress.throughput)")
                         .font(Typography.callout)
                         .foregroundStyle(.secondary)
                         .monospacedStat()
@@ -25,7 +25,7 @@ struct TransferProgressSheet: View {
                 Spacer(minLength: 0)
             }
 
-            ProgressView(value: state.transferProgress)
+            ProgressView(value: progress.progress)
                 .progressViewStyle(.linear)
                 .tint(AccentColor.primary)
                 .padding(.top, Spacing.md + 2)
@@ -33,7 +33,7 @@ struct TransferProgressSheet: View {
             HStack {
                 Text("\(percent)% complete")
                 Spacer()
-                Text(state.transferETA)
+                Text(progress.etaDescription)
             }
             .font(Typography.subheadline)
             .foregroundStyle(.secondary)
@@ -49,16 +49,20 @@ struct TransferProgressSheet: View {
         }
         .padding(Spacing.xl)
         .frame(width: 400)
-        .task {
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(130))
-                state.transferProgress = state.transferProgress >= 1.0 ? 0.06 : state.transferProgress + 0.02
-            }
+    }
+
+    private var titleText: String {
+        switch progress.direction {
+        case .sending:
+            return "Sending to \(progress.counterpartName)"
+        case .receiving:
+            return "Receiving from \(progress.counterpartName)"
         }
     }
 }
 
 private struct SpinningRingIcon: View {
+    let direction: ActiveTransferProgress.Direction
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     @Environment(\.appReducesMotion) private var appReduceMotion
     private var reduceMotion: Bool { systemReduceMotion || appReduceMotion }
@@ -69,7 +73,7 @@ private struct SpinningRingIcon: View {
                 .fill(AccentColor.primarySubtleFill)
                 .frame(width: 48, height: 48)
                 .overlay {
-                    Image(systemName: "iphone")
+                    Image(systemName: direction == .sending ? "paperplane.fill" : "tray.and.arrow.down.fill")
                         .font(.system(size: 22))
                         .foregroundStyle(AccentColor.primary)
                 }

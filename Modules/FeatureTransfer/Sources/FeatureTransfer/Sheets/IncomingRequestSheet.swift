@@ -2,7 +2,7 @@ import SwiftUI
 import DesignSystem
 
 struct IncomingRequestSheet: View {
-    let request: IncomingRequest
+    let request: IncomingTransferRequest
     let onDecline: () -> Void
     let onAccept: () -> Void
 
@@ -13,7 +13,7 @@ struct IncomingRequestSheet: View {
                     .fill(AccentColor.primarySubtleFill)
                     .frame(width: 60, height: 60)
                     .overlay {
-                        Image(systemName: "iphone")
+                        Image(systemName: request.sourceKind.symbol)
                             .font(.system(size: 28, weight: .regular))
                             .foregroundStyle(AccentColor.primary)
                     }

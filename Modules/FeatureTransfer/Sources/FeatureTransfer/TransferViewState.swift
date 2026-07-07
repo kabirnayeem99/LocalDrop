@@ -1,6 +1,6 @@
 import SwiftUI
 
-enum Screen: String, CaseIterable, Identifiable {
+enum Screen: String, CaseIterable, Identifiable, Codable, Sendable {
     case receive
     case send
     case history
@@ -10,24 +10,24 @@ enum Screen: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .receive: return "Receive"
-        case .send: return "Send"
-        case .history: return "History"
-        case .settings: return "Settings"
+        case .receive: "Receive"
+        case .send: "Send"
+        case .history: "History"
+        case .settings: "Settings"
         }
     }
 
     var symbol: String {
         switch self {
-        case .receive: return "dot.radiowaves.up.forward"
-        case .send: return "paperplane"
-        case .history: return "clock.arrow.circlepath"
-        case .settings: return "gearshape"
+        case .receive: "dot.radiowaves.up.forward"
+        case .send: "paperplane"
+        case .history: "clock.arrow.circlepath"
+        case .settings: "gearshape"
         }
     }
 }
 
-enum QuickSaveMode: String, CaseIterable, Identifiable {
+enum QuickSaveMode: String, CaseIterable, Identifiable, Codable, Sendable {
     case off
     case favorites
     case on
@@ -36,26 +36,26 @@ enum QuickSaveMode: String, CaseIterable, Identifiable {
 
     var label: String {
         switch self {
-        case .off: return "Off"
-        case .favorites: return "Favorites"
-        case .on: return "On"
+        case .off: "Off"
+        case .favorites: "Favorites"
+        case .on: "On"
         }
     }
 }
 
-enum ActiveSheet: Identifiable {
+enum ActiveSheet: Identifiable, Equatable {
     case incoming
     case progress
 
     var id: Int {
         switch self {
-        case .incoming: return 0
-        case .progress: return 1
+        case .incoming: 0
+        case .progress: 1
         }
     }
 }
 
-enum AppearanceSetting: String, CaseIterable, Identifiable {
+enum AppearanceSetting: String, CaseIterable, Identifiable, Codable, Sendable {
     case system
     case light
     case dark
@@ -64,22 +64,22 @@ enum AppearanceSetting: String, CaseIterable, Identifiable {
 
     var label: String {
         switch self {
-        case .system: return "System"
-        case .light: return "Light"
-        case .dark: return "Dark"
+        case .system: "System"
+        case .light: "Light"
+        case .dark: "Dark"
         }
     }
 
     var colorScheme: ColorScheme? {
         switch self {
-        case .system: return nil
-        case .light: return .light
-        case .dark: return .dark
+        case .system: nil
+        case .light: .light
+        case .dark: .dark
         }
     }
 }
 
-enum LanguageSetting: String, CaseIterable, Identifiable {
+enum LanguageSetting: String, CaseIterable, Identifiable, Codable, Sendable {
     case system
     case english
     case german
@@ -88,40 +88,9 @@ enum LanguageSetting: String, CaseIterable, Identifiable {
 
     var label: String {
         switch self {
-        case .system: return "System"
-        case .english: return "English"
-        case .german: return "Deutsch"
+        case .system: "System"
+        case .english: "English"
+        case .german: "Deutsch"
         }
     }
-}
-
-@Observable
-final class TransferViewState {
-    var screen: Screen = .receive
-    var quickSave: QuickSaveMode = .on
-    var activeSheet: ActiveSheet?
-
-    let deviceName = "MacBook M4 Air"
-    let waitingIdentifier = 9
-    let port = "53317"
-    let saveLocation = "~/Downloads/LocalDrop"
-
-    var appearance: AppearanceSetting = .system
-    var language: LanguageSetting = .system
-
-    var minimizeToMenuBar = false
-    var launchAtLogin = true
-    var reduceMotion = false
-    var requirePIN = false
-    var autoAcceptFavorites = true
-    var endToEndEncryption = true
-
-    var stagedFile: StagedFile? = StagedFile(name: "Design-Assets.zip", subtitle: "3 files · 24.6 MB ready to send")
-    var isDropTargeted = false
-
-    var transferProgress = 0.62
-    let transferTarget = "iPhone 15 Pro"
-    let transferFileName = "Design-Assets.zip"
-    let transferSpeed = "8.4 MB/s"
-    let transferETA = "~4s remaining"
 }

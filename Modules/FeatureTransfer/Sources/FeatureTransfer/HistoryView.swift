@@ -2,7 +2,7 @@ import SwiftUI
 import DesignSystem
 
 struct HistoryView: View {
-    @State private var entries = HistoryEntry.samples
+    @Bindable var store: TransferFeatureStore
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -11,7 +11,7 @@ struct HistoryView: View {
                     .font(Typography.headline)
                     .foregroundStyle(.primary)
                 Spacer()
-                Button("Clear all") { entries.removeAll() }
+                Button("Clear all") { store.clearHistory() }
                     .buttonStyle(.plain)
                     .font(Typography.callout.weight(.medium))
                     .foregroundStyle(AccentColor.primary)
@@ -21,7 +21,7 @@ struct HistoryView: View {
             .padding(.bottom, Spacing.sm + Spacing.xxs)
 
             List {
-                ForEach(entries) { entry in
+                ForEach(store.historyEntries) { entry in
                     HistoryRowView(entry: entry)
                 }
             }

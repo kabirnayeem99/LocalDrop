@@ -72,7 +72,7 @@ Kept the existing Logo/Color/Typography/Spacing/Materials/Accessibility sections
   - `ReceiveView.swift`, `SendView.swift`, `HistoryView.swift`, `SettingsView.swift`.
   - `Sheets/IncomingRequestSheet.swift`, `Sheets/TransferProgressSheet.swift`.
   - Rows/cards: `DeviceCardView.swift`, `HistoryRowView.swift`.
-  - Local UI state only (screen selection enum, toggle bindings, Quick Save mode, sheet presentation) — an `@Observable` view-state type owned by `RootView`, mirroring the mock's `Component.state` shape. This is presentation state needed to make the port interactive/navigable, not a stand-in for real transfer data — wiring to `LocalSendKit` is separate, future work and out of scope here. Screens take this state via `@Bindable`/`@Environment`, not hardcoded mock values, so hookup later is a data-source swap, not a rewrite.
+  - Local UI state only (screen selection enum, toggle bindings, Quick Save mode, sheet presentation) — an `@Observable` view-state type owned by `RootView`, mirroring the mock's `Component.state` shape. This landed the shell, but the protocol hookup is **not** a simple data-source swap; it now has a dedicated follow-up plan in [ui-localsendkit-integration-plan.md](./ui-localsendkit-integration-plan.md), which replaces this doc's earlier assumption that a later bind would be mostly mechanical.
 - **`App/LocalDropApp/LocalDropApp.swift`**: replace `EmptyView()` with `RootView()`, set `.windowStyle`/`.defaultSize` to match the mock's 1120×~700 proportions (title bar + 232pt sidebar + content), keep `MenuBarExtra` as-is (out of scope — mock doesn't model it beyond a placeholder icon).
 
 ### Exact values to carry over from the mock (for pixel parity)

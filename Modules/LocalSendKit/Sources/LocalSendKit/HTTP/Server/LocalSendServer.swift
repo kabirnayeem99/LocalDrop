@@ -4,27 +4,33 @@ public struct LocalSendServerConfiguration: Sendable {
     public var registerInfo: RegisterInfo
     public var pin: String?
     public var uploadPolicy: PrepareUploadPolicy
+    public var incomingRequestBridge: IncomingTransferRequestBridge?
     public var sharedFiles: [String: LocalSharedFile]
     public var sharedFilesProvider: (@Sendable () async -> [String: LocalSharedFile])?
     public var allowDownloads: Bool
     public var storageDirectory: URL
+    public var stateObserver: (@Sendable (LocalSendServerStateSnapshot) async -> Void)?
 
     public init(
         registerInfo: RegisterInfo,
         pin: String? = nil,
         uploadPolicy: PrepareUploadPolicy = .acceptAll,
+        incomingRequestBridge: IncomingTransferRequestBridge? = nil,
         sharedFiles: [String: LocalSharedFile] = [:],
         sharedFilesProvider: (@Sendable () async -> [String: LocalSharedFile])? = nil,
         allowDownloads: Bool = true,
-        storageDirectory: URL
+        storageDirectory: URL,
+        stateObserver: (@Sendable (LocalSendServerStateSnapshot) async -> Void)? = nil
     ) {
         self.registerInfo = registerInfo
         self.pin = pin
         self.uploadPolicy = uploadPolicy
+        self.incomingRequestBridge = incomingRequestBridge
         self.sharedFiles = sharedFiles
         self.sharedFilesProvider = sharedFilesProvider
         self.allowDownloads = allowDownloads
         self.storageDirectory = storageDirectory
+        self.stateObserver = stateObserver
     }
 }
 
@@ -113,23 +119,27 @@ public actor LocalSendServer {
             return .empty(statusCode: 400)
         }
 
+        let resolvedResponse: HTTPResponse
         switch try await receiveSession.prepare(
             request: payload,
             senderIP: request.remoteAddress,
             policy: configuration.uploadPolicy,
+            incomingRequestBridge: configuration.incomingRequestBridge,
             destinationDirectory: configuration.storageDirectory,
             sessionIdFactory: { UUID().uuidString },
             tokenFactory: { _ in UUID().uuidString }
         ) {
         case .accepted(let response):
-            return try jsonResponse(response)
+            resolvedResponse = try jsonResponse(response)
         case .rejected:
-            return .empty(statusCode: 403)
+            resolvedResponse = .empty(statusCode: 403)
         case .blocked:
-            return .empty(statusCode: 409)
+            resolvedResponse = .empty(statusCode: 409)
         case .noTransferNeeded:
-            return .empty(statusCode: 204)
+            resolvedResponse = .empty(statusCode: 204)
         }
+        await notifyStateObserver()
+        return resolvedResponse
     }
 
     private func handleUpload(_ request: HTTPRequest) async throws -> HTTPResponse {
@@ -141,16 +151,19 @@ public actor LocalSendServer {
             body: request.body
         )
 
+        let response: HTTPResponse
         switch result {
         case .success:
-            return .empty(statusCode: 200)
+            response = .empty(statusCode: 200)
         case .missingParameters:
-            return .empty(statusCode: 400)
+            response = .empty(statusCode: 400)
         case .forbidden:
-            return .empty(statusCode: 403)
+            response = .empty(statusCode: 403)
         case .blocked:
-            return .empty(statusCode: 409)
+            response = .empty(statusCode: 409)
         }
+        await notifyStateObserver()
+        return response
     }
 
     private func handleCancel(_ request: HTTPRequest) async -> HTTPResponse {
@@ -159,9 +172,11 @@ public actor LocalSendServer {
         }
 
         if await receiveSession.cancel(sessionId: sessionId, senderIP: request.remoteAddress) {
+            await notifyStateObserver()
             return .empty(statusCode: 200)
         }
         if await sendSession.cancel(sessionId: sessionId, requesterIP: request.remoteAddress) {
+            await notifyStateObserver()
             return .empty(statusCode: 200)
         }
         return .empty(statusCode: 409)
@@ -181,6 +196,7 @@ public actor LocalSendServer {
             return .empty(statusCode: 429)
         }
 
+        let resolvedResponse: HTTPResponse
         switch await sendSession.prepare(
             requesterIP: request.remoteAddress,
             localInfo: configuration.registerInfo.asInfoResponse,
@@ -188,10 +204,12 @@ public actor LocalSendServer {
             allow: configuration.allowDownloads
         ) {
         case .accepted(let response):
-            return try jsonResponse(response)
+            resolvedResponse = try jsonResponse(response)
         case .rejected:
-            return .empty(statusCode: 403)
+            resolvedResponse = .empty(statusCode: 403)
         }
+        await notifyStateObserver()
+        return resolvedResponse
     }
 
     private func handleDownload(_ request: HTTPRequest) async throws -> HTTPResponse {
@@ -205,7 +223,7 @@ public actor LocalSendServer {
             return .empty(statusCode: 403)
         }
 
-        return HTTPResponse(
+        let response = HTTPResponse(
             statusCode: 200,
             headers: [
                 "Content-Disposition": "attachment; filename=\"\(file.file.fileName)\"",
@@ -214,6 +232,8 @@ public actor LocalSendServer {
             ],
             body: file.responseBody
         )
+        await notifyStateObserver()
+        return response
     }
 
     private func jsonResponse<T: Encodable>(_ value: T) throws -> HTTPResponse {
@@ -222,6 +242,18 @@ public actor LocalSendServer {
             statusCode: 200,
             headers: ["Content-Type": "application/json"],
             body: data
+        )
+    }
+
+    private func notifyStateObserver() async {
+        guard let stateObserver = configuration.stateObserver else {
+            return
+        }
+        await stateObserver(
+            LocalSendServerStateSnapshot(
+                receiveSession: await receiveSession.snapshot(),
+                sendSessions: await sendSession.snapshots()
+            )
         )
     }
 }

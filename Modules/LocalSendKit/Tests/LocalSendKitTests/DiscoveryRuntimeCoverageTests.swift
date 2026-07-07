@@ -263,6 +263,7 @@ struct DiscoveryRuntimeCoverageTests {
         let stream2 = service.stream()
 
         let peer = DiscoveredPeer(
+            host: "127.0.0.1",
             info: RegisterInfo(alias: "FanOut", fingerprint: "FANOUT-FP"),
             shouldReplyViaRegister: false
         )
@@ -364,6 +365,7 @@ struct DiscoveryRuntimeCoverageTests {
         try await Task.sleep(for: .milliseconds(200))
 
         let peer = DiscoveredPeer(
+            host: "127.0.0.1",
             info: RegisterInfo(alias: "Sender", fingerprint: "SENDER-FP", port: 53317, protocolType: .https),
             shouldReplyViaRegister: true
         )
@@ -427,6 +429,7 @@ struct DiscoveryRuntimeCoverageTests {
             download: true
         )
         let peer = DiscoveredPeer(
+            host: "127.0.0.1",
             info: RegisterInfo(alias: "Sender", fingerprint: "SENDER-FP", port: 53317, protocolType: .https),
             shouldReplyViaRegister: true
         )
@@ -468,6 +471,7 @@ struct DiscoveryRuntimeCoverageTests {
         defer { service.stop() }
 
         let peer = DiscoveredPeer(
+            host: "127.0.0.1",
             info: RegisterInfo(alias: "Quiet", fingerprint: "QUIET-FP"),
             shouldReplyViaRegister: false
         )

@@ -2,22 +2,24 @@ import Foundation
 import Network
 
 public struct DiscoveredPeer: Equatable, Sendable {
+    public var host: String
     public var info: RegisterInfo
     public var shouldReplyViaRegister: Bool
 
-    public init(info: RegisterInfo, shouldReplyViaRegister: Bool) {
+    public init(host: String, info: RegisterInfo, shouldReplyViaRegister: Bool) {
+        self.host = host
         self.info = info
         self.shouldReplyViaRegister = shouldReplyViaRegister
     }
 }
 
 public enum MulticastListener {
-    public static func decodeAnnouncement(_ data: Data, selfFingerprint: String) throws -> DiscoveredPeer? {
+    public static func decodeAnnouncement(_ data: Data, selfFingerprint: String, host: String) throws -> DiscoveredPeer? {
         let message = try JSONDecoder().decode(MulticastMessage.self, from: data)
         guard message.fingerprint != selfFingerprint else {
             return nil
         }
-        return DiscoveredPeer(info: message.registerInfo, shouldReplyViaRegister: message.announce || message.announcement)
+        return DiscoveredPeer(host: host, info: message.registerInfo, shouldReplyViaRegister: message.announce || message.announcement)
     }
 }
 
@@ -105,9 +107,12 @@ public final class MulticastListenerRuntime: @unchecked Sendable {
     }
 
     public func start() {
-        group.setReceiveHandler(maximumMessageSize: 64 * 1024, rejectOversizedMessages: true) { [self] _, content, _ in
+        group.setReceiveHandler(maximumMessageSize: 64 * 1024, rejectOversizedMessages: true) { [self] message, content, _ in
             guard let data = content else { return }
-            guard let peer = try? MulticastListener.decodeAnnouncement(data, selfFingerprint: selfFingerprint) else {
+            guard
+                let remoteHost = Self.remoteHost(from: message.remoteEndpoint),
+                let peer = try? MulticastListener.decodeAnnouncement(data, selfFingerprint: selfFingerprint, host: remoteHost)
+            else {
                 return
             }
             callback(peer)
@@ -117,6 +122,16 @@ public final class MulticastListenerRuntime: @unchecked Sendable {
 
     public func stop() {
         group.cancel()
+    }
+
+    private static func remoteHost(from endpoint: NWEndpoint?) -> String? {
+        guard let endpoint else {
+            return nil
+        }
+        if case .hostPort(let host, _) = endpoint {
+            return host.debugDescription
+        }
+        return nil
     }
 }
 
@@ -177,17 +192,21 @@ public final class DiscoveryService: @unchecked Sendable {
     private let listener: MulticastListenerRuntime
     private let announcer: MulticastAnnouncerRuntime
     private let registerResponder: @Sendable (RegisterInfo) async -> Bool
+    private let peersObserver: (@Sendable ([DiscoveredPeer]) async -> Void)?
     private let stateQueue = DispatchQueue(label: "DiscoveryService.state")
     private var continuations: [UUID: AsyncStream<DiscoveredPeer>.Continuation] = [:]
+    private var peersByFingerprint: [String: DiscoveredPeer] = [:]
 
     public init(
         listener: MulticastListenerRuntime,
         announcer: MulticastAnnouncerRuntime,
-        registerResponder: @escaping @Sendable (RegisterInfo) async -> Bool
+        registerResponder: @escaping @Sendable (RegisterInfo) async -> Bool,
+        peersObserver: (@Sendable ([DiscoveredPeer]) async -> Void)? = nil
     ) {
         self.listener = listener
         self.announcer = announcer
         self.registerResponder = registerResponder
+        self.peersObserver = peersObserver
     }
 
     public func start() {
@@ -206,11 +225,13 @@ public final class DiscoveryService: @unchecked Sendable {
         let continuationsToFinish = stateQueue.sync { () -> [AsyncStream<DiscoveredPeer>.Continuation] in
             let values = Array(continuations.values)
             continuations.removeAll()
+            peersByFingerprint.removeAll()
             return values
         }
         for continuation in continuationsToFinish {
             continuation.finish()
         }
+        notifyPeersObserver()
     }
 
     public func stream() -> AsyncStream<DiscoveredPeer> {
@@ -226,11 +247,16 @@ public final class DiscoveryService: @unchecked Sendable {
     }
 
     public func handle(peer: DiscoveredPeer, localInfo: RegisterInfo) async {
+        let peersSnapshot = stateQueue.sync { () -> [DiscoveredPeer] in
+            peersByFingerprint[peer.info.fingerprint] = peer
+            return sortedPeersLocked()
+        }
         stateQueue.sync {
             for continuation in continuations.values {
                 continuation.yield(peer)
             }
         }
+        await peersObserver?(peersSnapshot)
 
         guard peer.shouldReplyViaRegister else { return }
         let didRespondViaRegister = await registerResponder(peer.info)
@@ -253,9 +279,33 @@ public final class DiscoveryService: @unchecked Sendable {
         try await announcer.announce(message)
     }
 
+    public func peersSnapshot() -> [DiscoveredPeer] {
+        stateQueue.sync {
+            sortedPeersLocked()
+        }
+    }
+
     private func removeContinuation(id: UUID) {
         _ = stateQueue.sync {
             continuations.removeValue(forKey: id)
+        }
+    }
+
+    private func notifyPeersObserver() {
+        guard let peersObserver else {
+            return
+        }
+        let peersSnapshot = stateQueue.sync {
+            sortedPeersLocked()
+        }
+        Task {
+            await peersObserver(peersSnapshot)
+        }
+    }
+
+    private func sortedPeersLocked() -> [DiscoveredPeer] {
+        peersByFingerprint.values.sorted { lhs, rhs in
+            lhs.info.alias < rhs.info.alias
         }
     }
 }

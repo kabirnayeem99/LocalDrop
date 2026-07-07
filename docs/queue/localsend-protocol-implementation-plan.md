@@ -63,7 +63,7 @@ Session/         TransferSessions.swift (receive/send session actors), PinAttemp
 LocalSendKit.swift   public entry points / facade constants (e.g. apiPrefix)
 ```
 
-`FeatureTransfer` consumes this via its existing dependency edge; no changes needed there for this plan's scope.
+`FeatureTransfer` consumes this via its existing dependency edge, but the UI/application-layer hookup is large enough to deserve its own follow-up plan: [ui-localsendkit-integration-plan.md](./ui-localsendkit-integration-plan.md). `LocalSendKit` stays the protocol boundary; the new plan covers lifecycle ownership, injected feature state, and receive/send mediation above it.
 
 ## Wire-format ground truth (from reference, not just the wiki doc)
 

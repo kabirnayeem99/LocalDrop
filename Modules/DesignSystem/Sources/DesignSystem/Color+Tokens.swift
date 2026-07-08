@@ -41,3 +41,26 @@ public enum AccentColor {
         })
     }
 }
+
+public enum SemanticColor {
+    public static let brand = AccentColor.primary
+    public static let brandSubtleFill = AccentColor.primarySubtleFill
+
+    public static let discovery = Color(nsColor: .systemCyan)
+    public static let discoverySubtleFill = Color(nsColor: .systemCyan).opacity(0.12)
+
+    public static let sending = Color(nsColor: .systemBlue)
+    public static let sendingSubtleFill = Color(nsColor: .systemBlue).opacity(0.12)
+
+    public static let receiving = Color(nsColor: .systemGreen)
+    public static let receivingSubtleFill = Color(nsColor: .systemGreen).opacity(0.12)
+
+    public static let pending = Color(nsColor: .systemOrange)
+    public static let pendingSubtleFill = Color(nsColor: .systemOrange).opacity(0.13)
+
+    public static let success = Color(nsColor: .systemGreen)
+    public static let successSubtleFill = Color(nsColor: .systemGreen).opacity(0.12)
+
+    public static let destructive = Color(nsColor: .systemRed)
+    public static let destructiveSubtleFill = Color(nsColor: .systemRed).opacity(0.12)
+}

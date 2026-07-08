@@ -5,6 +5,15 @@ import UniformTypeIdentifiers
 struct SendView: View {
     @Bindable var store: TransferFeatureStore
 
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.appReducesMotion) private var appReduceMotion
+    private var reduceMotion: Bool { systemReduceMotion || appReduceMotion }
+
+    @State private var dropZoneState: DropZoneInteractionState = .idle
+    @State private var dropZoneResetTask: Task<Void, Never>?
+    @State private var dropZoneStateToken = 0
+    @State private var selectedSelectionType = "File"
+
     private let selectionTypes: [(symbol: String, label: String)] = [
         ("doc", "File"),
         ("folder", "Folder"),
@@ -22,7 +31,13 @@ struct SendView: View {
 
                 LazyVGrid(columns: selectionColumns, spacing: Spacing.sm) {
                     ForEach(selectionTypes, id: \.label) { type in
-                        SelectionTypeButton(symbol: type.symbol, label: type.label)
+                        SelectionTypeButton(
+                            symbol: type.symbol,
+                            label: type.label,
+                            isSelected: selectedSelectionType == type.label
+                        ) {
+                            selectedSelectionType = type.label
+                        }
                     }
                 }
                 .padding(.top, Spacing.sm)
@@ -30,6 +45,10 @@ struct SendView: View {
                 if let staged = store.stagedItems.first {
                     StagedFileChip(file: staged) { store.removeStagedItem(id: staged.id) }
                         .padding(.top, Spacing.sm + Spacing.xxs)
+                        .transition(.asymmetric(
+                            insertion: .move(edge: .top).combined(with: .opacity),
+                            removal: .opacity.combined(with: .scale(scale: 0.9))
+                        ))
                 }
 
                 HStack {
@@ -39,13 +58,15 @@ struct SendView: View {
                     Spacer()
                     HStack(spacing: 0) {
                         Button { store.refreshNearbyPeers() } label: {
-                            Image(systemName: "arrow.clockwise")
+                            RefreshIcon(isRefreshing: store.isRefreshingDiscovery)
                         }
-                        .help("Refresh")
-                        Button { store.refreshNearbyPeers() } label: {
-                            Image(systemName: "dot.radiowaves.left.and.right")
+                        .help(store.isRefreshingDiscovery ? "Refreshing discovery" : "Refresh")
+                        .disabled(store.isRefreshingDiscovery)
+                        Button { store.scanNearbyPeers() } label: {
+                            ScanIcon(isScanning: store.isScanningDiscovery)
                         }
-                        .help("Scan")
+                        .help(store.isScanningDiscovery ? "Scanning for nearby devices" : "Scan")
+                        .disabled(store.isScanningDiscovery)
                     }
                     .buttonStyle(.borderless)
                     .foregroundStyle(.secondary)
@@ -53,32 +74,61 @@ struct SendView: View {
                 }
                 .padding(.top, Spacing.xl + Spacing.xxs)
 
-                LazyVGrid(columns: columns, spacing: Spacing.sm) {
-                    ForEach(store.nearbyPeers) { device in
-                        DeviceCardView(device: device) {
-                            store.send(to: device.id)
+                if store.nearbyPeers.isEmpty {
+                    NearbyDevicesEmptyState()
+                        .padding(.top, Spacing.sm)
+                } else {
+                    LazyVGrid(columns: columns, spacing: Spacing.sm) {
+                        ForEach(store.nearbyPeers) { device in
+                            DeviceCardView(device: device) {
+                                store.send(to: device.id)
+                            }
                         }
                     }
+                    .padding(.top, Spacing.sm)
                 }
-                .padding(.top, Spacing.sm)
 
                 DropZoneView(
-                    isTargeted: false,
+                    state: dropZoneState,
                     systemImage: "arrow.up.doc",
                     label: "Drag files or folders anywhere to send"
                 )
                 .frame(minHeight: 80)
                 .padding(.top, Spacing.md)
                 .dropDestination(for: URL.self) { urls, _ in
-                    guard urls.isEmpty == false else { return false }
+                    guard urls.isEmpty == false else {
+                        cancelDropZoneReset()
+                        dropZoneStateToken += 1
+                        dropZoneState = .idle
+                        return false
+                    }
                     store.stageDroppedItems(urls)
+                    flashDropZoneAccepted()
                     return true
-                } isTargeted: { _ in
+                } isTargeted: { targeted in
+                    if targeted {
+                        cancelDropZoneReset()
+                        dropZoneStateToken += 1
+                        dropZoneState = .targeted
+                    } else if dropZoneState != .accepted {
+                        // Don't stomp the accepted flash when the drag exits on drop.
+                        cancelDropZoneReset()
+                        dropZoneStateToken += 1
+                        dropZoneState = .idle
+                    }
                 }
             }
             .padding(.horizontal, 30)
             .padding(.top, Spacing.xl + Spacing.xxs)
             .padding(.bottom, Spacing.xxxl - Spacing.xs)
+            .animation(
+                reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.8),
+                value: store.stagedItems
+            )
+        }
+        .onDisappear {
+            cancelDropZoneReset()
+            dropZoneStateToken += 1
         }
     }
 
@@ -87,36 +137,136 @@ struct SendView: View {
             .font(Typography.headline)
             .foregroundStyle(.primary)
     }
+
+    private func flashDropZoneAccepted() {
+        cancelDropZoneReset()
+        dropZoneStateToken += 1
+        let token = dropZoneStateToken
+        dropZoneState = .accepted
+        dropZoneResetTask = Task {
+            try? await Task.sleep(nanoseconds: 380_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                if token == dropZoneStateToken, dropZoneState == .accepted {
+                    dropZoneState = .idle
+                }
+                dropZoneResetTask = nil
+            }
+        }
+    }
+
+    private func cancelDropZoneReset() {
+        dropZoneResetTask?.cancel()
+        dropZoneResetTask = nil
+    }
 }
 
 private struct SelectionTypeButton: View {
     let symbol: String
     let label: String
+    let isSelected: Bool
+    let action: () -> Void
     @State private var hovering = false
 
     var body: some View {
-        Button { } label: {
+        Button(action: action) {
             VStack(spacing: Spacing.xs + Spacing.xxs) {
                 Image(systemName: symbol)
                     .font(.system(size: 24, weight: .regular))
-                    .foregroundStyle(AccentColor.primary)
+                    .foregroundStyle(isSelected ? .white : AccentColor.primary)
                 Text(label)
                     .font(Typography.headline)
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(isSelected ? .white : .primary)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, Spacing.lg)
-            .background(.background, in: RoundedRectangle.continuous(Radius.xl))
+            .background(
+                isSelected ? AnyShapeStyle(AccentColor.primary) : AnyShapeStyle(.background),
+                in: RoundedRectangle.continuous(Radius.xl)
+            )
             .overlay {
                 RoundedRectangle.continuous(Radius.xl)
                     .strokeBorder(
-                        hovering ? AccentColor.primary.opacity(0.4) : Color(nsColor: .separatorColor),
-                        lineWidth: hovering ? 1 : 0.5
+                        isSelected || hovering ? AccentColor.primary.opacity(0.55) : Color(nsColor: .separatorColor),
+                        lineWidth: isSelected || hovering ? 1 : 0.5
                     )
             }
+            .scaleEffect(hovering && !isSelected ? 1.01 : 1)
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+    }
+}
+
+private struct RefreshIcon: View {
+    let isRefreshing: Bool
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.appReducesMotion) private var appReduceMotion
+    private var reduceMotion: Bool { systemReduceMotion || appReduceMotion }
+
+    var body: some View {
+        if isRefreshing, !reduceMotion {
+            TimelineView(.animation) { context in
+                Image(systemName: "arrow.clockwise")
+                    .rotationEffect(.degrees(context.date.timeIntervalSinceReferenceDate * 360))
+            }
+        } else {
+            Image(systemName: "arrow.clockwise")
+        }
+    }
+}
+
+private struct ScanIcon: View {
+    let isScanning: Bool
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.appReducesMotion) private var appReduceMotion
+    private var reduceMotion: Bool { systemReduceMotion || appReduceMotion }
+
+    var body: some View {
+        ZStack {
+            if isScanning, !reduceMotion {
+                Circle()
+                    .stroke(SemanticColor.discovery.opacity(0.3), lineWidth: 1)
+                    .frame(width: 18, height: 18)
+                    .scaleEffect(1.25)
+                    .opacity(0.7)
+            }
+            Image(systemName: "dot.radiowaves.left.and.right")
+        }
+    }
+}
+
+private struct NearbyDevicesEmptyState: View {
+    var body: some View {
+        HStack(spacing: Spacing.md) {
+            ZStack {
+                Circle()
+                    .fill(SemanticColor.discoverySubtleFill)
+                    .frame(width: 52, height: 52)
+                Image(systemName: "dot.radiowaves.left.and.right")
+                    .font(.system(size: 22, weight: .medium))
+                    .foregroundStyle(SemanticColor.discovery)
+            }
+
+            VStack(alignment: .leading, spacing: Spacing.xxs) {
+                Text("No nearby devices")
+                    .font(Typography.headline)
+                    .foregroundStyle(.primary)
+                Text("Refresh discovery or keep this screen open while another device starts LocalDrop.")
+                    .font(Typography.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(Spacing.md)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle.continuous(Radius.xl))
+        .overlay {
+            RoundedRectangle.continuous(Radius.xl)
+                .strokeBorder(SemanticColor.discovery.opacity(0.18), lineWidth: 0.5)
+        }
     }
 }
 
@@ -124,10 +274,17 @@ private struct StagedFileChip: View {
     let file: StagedTransferItem
     let onRemove: () -> Void
 
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.appReducesMotion) private var appReduceMotion
+    private var reduceMotion: Bool { systemReduceMotion || appReduceMotion }
+    // Starts flashed so the accent tint is the first rendered frame, then
+    // settles back to the resting fill once the chip appears.
+    @State private var justStaged = true
+
     var body: some View {
         HStack(spacing: Spacing.sm) {
             RoundedRectangle.continuous(Radius.md)
-                .fill(.background)
+                .fill(justStaged ? AnyShapeStyle(AccentColor.primary.opacity(0.22)) : AnyShapeStyle(.background))
                 .frame(width: 40, height: 40)
                 .overlay {
                     Image(systemName: file.fileTypeSymbol)
@@ -137,6 +294,15 @@ private struct StagedFileChip: View {
                 .overlay {
                     RoundedRectangle.continuous(Radius.md)
                         .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5)
+                }
+                .onAppear {
+                    guard !reduceMotion else {
+                        justStaged = false
+                        return
+                    }
+                    withAnimation(.easeOut(duration: 0.5).delay(0.08)) {
+                        justStaged = false
+                    }
                 }
 
             VStack(alignment: .leading, spacing: Spacing.xxs) {

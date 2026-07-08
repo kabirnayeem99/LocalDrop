@@ -46,15 +46,15 @@ struct HistoryRowView: View {
 
     private var iconTint: Color {
         switch entry.outcome {
-        case .completed: return AccentColor.primary
-        case .declined: return Color(nsColor: .systemRed)
+        case .completed: return SemanticColor.success
+        case .declined: return SemanticColor.destructive
         }
     }
 
     private var outcomeTint: Color {
         switch entry.outcome {
-        case .completed: return Color(nsColor: .systemGreen)
-        case .declined: return Color(nsColor: .systemRed)
+        case .completed: return SemanticColor.success
+        case .declined: return SemanticColor.destructive
         }
     }
 }

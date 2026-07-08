@@ -18,13 +18,22 @@ struct RootView: View {
         }
         .environment(\.appReducesMotion, store.reduceMotion)
         .preferredColorScheme(store.appearance.colorScheme)
+        .overlay(alignment: .top) {
+            if let feedback = store.feedback {
+                FeedbackBanner(feedback: feedback)
+                    .padding(.top, Spacing.sm)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .animation(store.reduceMotion ? nil : .easeOut(duration: 0.18), value: store.feedback)
         .sheet(item: presentedSheet) { sheet in
             switch sheet {
             case .incoming(let request):
                 IncomingRequestSheet(
                     request: request,
                     onDecline: { store.declineIncomingRequest() },
-                    onAccept: { store.acceptIncomingRequest() }
+                    onAcceptAll: { store.acceptIncomingRequest() },
+                    onAcceptSelection: { store.acceptIncomingRequest(fileIDs: $0) }
                 )
             case .progress(let progress):
                 TransferProgressSheet(progress: progress) {
@@ -38,7 +47,7 @@ struct RootView: View {
         List(selection: $store.screen) {
             Section("Transfer") {
                 ForEach(Screen.allCases) { screen in
-                    Label(screen.title, systemImage: screen.symbol)
+                    SidebarRow(screen: screen, badgeCount: badgeCount(for: screen))
                         .tag(screen)
                 }
             }
@@ -49,7 +58,11 @@ struct RootView: View {
             sidebarHeader
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            ThisDeviceChip(deviceName: store.deviceName, statusText: store.runtimeStatusText)
+            ThisDeviceChip(
+                deviceName: store.deviceName,
+                statusText: store.runtimeStatusText,
+                isAvailable: store.isRuntimeAvailable
+            )
                 .padding(Spacing.sm)
         }
     }
@@ -87,10 +100,8 @@ struct RootView: View {
 
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {
         ToolbarItemGroup(placement: .primaryAction) {
-            Button {
+            RefreshToolbarButton(isRefreshing: store.isRefreshingDiscovery) {
                 store.refreshNearbyPeers()
-            } label: {
-                Label("Refresh", systemImage: "arrow.clockwise")
             }
 
             Button {
@@ -104,6 +115,17 @@ struct RootView: View {
             } label: {
                 Label("Settings", systemImage: "gearshape")
             }
+        }
+    }
+
+    private func badgeCount(for screen: Screen) -> Int {
+        switch screen {
+        case .receive:
+            return store.incomingRequest == nil ? 0 : 1
+        case .send:
+            return store.activeTransfer == nil ? 0 : 1
+        case .history, .settings:
+            return 0
         }
     }
 
@@ -131,6 +153,58 @@ struct RootView: View {
     }
 }
 
+private struct SidebarRow: View {
+    let screen: Screen
+    let badgeCount: Int
+
+    var body: some View {
+        Label {
+            HStack(spacing: Spacing.xs) {
+                Text(screen.title)
+                Spacer(minLength: 0)
+                if badgeCount > 0 {
+                    Text("\(badgeCount)")
+                        .font(Typography.caption1.weight(.bold))
+                        .foregroundStyle(.white)
+                        .frame(minWidth: 16, minHeight: 16)
+                        .background(SemanticColor.pending, in: Capsule())
+                        .accessibilityLabel("\(badgeCount) active item")
+                }
+            }
+        } icon: {
+            Image(systemName: screen.symbol)
+        }
+    }
+}
+
+private struct RefreshToolbarButton: View {
+    let isRefreshing: Bool
+    let action: () -> Void
+
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.appReducesMotion) private var appReduceMotion
+    private var reduceMotion: Bool { systemReduceMotion || appReduceMotion }
+
+    var body: some View {
+        Button(action: action) {
+            Label {
+                Text("Refresh")
+            } icon: {
+                if isRefreshing, !reduceMotion {
+                    TimelineView(.animation) { context in
+                        Image(systemName: "arrow.clockwise")
+                            .rotationEffect(.degrees(context.date.timeIntervalSinceReferenceDate * 360))
+                    }
+                } else {
+                    Image(systemName: "arrow.clockwise")
+                }
+            }
+        }
+        .help(isRefreshing ? "Refreshing discovery" : "Refresh discovery")
+        .disabled(isRefreshing)
+    }
+}
+
 private enum PresentedSheet: Identifiable {
     case incoming(IncomingTransferRequest)
     case progress(ActiveTransferProgress)
@@ -148,6 +222,11 @@ private enum PresentedSheet: Identifiable {
 private struct ThisDeviceChip: View {
     let deviceName: String
     let statusText: String
+    let isAvailable: Bool
+
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.appReducesMotion) private var appReduceMotion
+    private var reduceMotion: Bool { systemReduceMotion || appReduceMotion }
 
     var body: some View {
         HStack(spacing: Spacing.xs + Spacing.xxs) {
@@ -170,9 +249,7 @@ private struct ThisDeviceChip: View {
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                 HStack(spacing: Spacing.xxs + 1) {
-                    Circle()
-                        .fill(Color(nsColor: .systemGreen))
-                        .frame(width: 6, height: 6)
+                    RuntimeStatusDot(isAvailable: isAvailable, reduceMotion: reduceMotion)
                     Text(statusText)
                         .font(Typography.subheadline)
                         .foregroundStyle(.secondary)
@@ -187,6 +264,59 @@ private struct ThisDeviceChip: View {
         .overlay {
             RoundedRectangle.continuous(Radius.lg)
                 .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5)
+        }
+        .help("Runtime status: \(statusText)")
+    }
+}
+
+private struct RuntimeStatusDot: View {
+    let isAvailable: Bool
+    let reduceMotion: Bool
+
+    var body: some View {
+        ZStack {
+            if isAvailable, !reduceMotion {
+                Circle()
+                    .stroke(SemanticColor.success.opacity(0.28), lineWidth: 1)
+                    .frame(width: 12, height: 12)
+                    .symbolEffect(.pulse)
+            }
+            Circle()
+                .fill(isAvailable ? SemanticColor.success : SemanticColor.pending)
+                .frame(width: 6, height: 6)
+        }
+        .accessibilityLabel(isAvailable ? "Runtime available" : "Runtime unavailable")
+    }
+}
+
+private struct FeedbackBanner: View {
+    let feedback: TransferFeedback
+
+    var body: some View {
+        Label(feedback.message, systemImage: feedback.symbol)
+            .font(Typography.callout.weight(.semibold))
+            .foregroundStyle(tint)
+            .padding(.horizontal, Spacing.md)
+            .padding(.vertical, Spacing.xs + 2)
+            .background(.regularMaterial, in: Capsule())
+            .overlay {
+                Capsule()
+                    .strokeBorder(tint.opacity(0.22), lineWidth: 0.5)
+            }
+            .shadow(color: .black.opacity(0.12), radius: 10, y: 4)
+            .accessibilityAddTraits(.isStaticText)
+    }
+
+    private var tint: Color {
+        switch feedback.tone {
+        case .neutral:
+            return SemanticColor.discovery
+        case .success:
+            return SemanticColor.success
+        case .pending:
+            return SemanticColor.pending
+        case .destructive:
+            return SemanticColor.destructive
         }
     }
 }

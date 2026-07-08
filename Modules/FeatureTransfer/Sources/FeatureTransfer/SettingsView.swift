@@ -1,8 +1,14 @@
 import SwiftUI
 import DesignSystem
+import AppKit
 
 struct SettingsView: View {
     @Bindable var store: TransferFeatureStore
+    @State private var saveLocationPulse = false
+    @State private var securityDialog: SecurityDialog?
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.appReducesMotion) private var appReduceMotion
+    private var reduceMotion: Bool { systemReduceMotion || appReduceMotion }
 
     var body: some View {
         Form {
@@ -13,7 +19,7 @@ struct SettingsView: View {
                 .pickerStyle(.menu)
 
                 LabeledContent("Accent color") {
-                    AccentSwatchRow()
+                    AccentSwatchRow(selection: $store.accentColor)
                 }
 
                 Picker("Language", selection: $store.language) {
@@ -28,18 +34,26 @@ struct SettingsView: View {
 
             Section("Receiving") {
                 LabeledContent {
-                    Button("Choose…") { }
+                    Button("Choose…") { chooseSaveLocation() }
                 } label: {
                     VStack(alignment: .leading, spacing: Spacing.xxs) {
                         Text("Save location")
                         Text(store.saveLocation)
                             .font(Typography.subheadline)
                             .foregroundStyle(.secondary)
+                            .padding(.vertical, saveLocationPulse ? 2 : 0)
+                            .background(
+                                saveLocationPulse ? SemanticColor.successSubtleFill : .clear,
+                                in: RoundedRectangle.continuous(Radius.sm)
+                            )
+                            .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: saveLocationPulse)
                     }
                 }
 
                 Toggle("Require PIN for incoming", isOn: $store.requirePIN)
+                    .help("Adds a PIN check before accepting incoming transfers.")
                 Toggle("Auto-accept from favorites", isOn: $store.autoAcceptFavorites)
+                    .help("Automatically accepts transfers only from trusted favorite devices.")
             }
 
             Section("Network") {
@@ -50,45 +64,141 @@ struct SettingsView: View {
                         .monospacedStat()
                 }
                 Toggle("Allow downloads", isOn: $store.allowDownloads)
+                    .help("Allows peers to fetch files exposed by this device.")
                 Toggle("End-to-end encryption", isOn: $store.endToEndEncryption)
+                    .help("Keeps transfer traffic encrypted when supported by the runtime.")
             }
         }
         .formStyle(.grouped)
         .tint(AccentColor.primary)
+        .alert(item: $securityDialog) { dialog in
+            Alert(
+                title: Text("Security setting changed"),
+                message: Text(dialog.message),
+                dismissButton: .default(Text("OK"))
+            )
+        }
         .onChange(of: store.appearance) { _, _ in store.persistSettings() }
+        .onChange(of: store.accentColor) { _, _ in store.persistSettings() }
         .onChange(of: store.language) { _, _ in store.persistSettings() }
         .onChange(of: store.minimizeToMenuBar) { _, _ in store.persistSettings() }
         .onChange(of: store.launchAtLogin) { _, _ in store.persistSettings() }
         .onChange(of: store.reduceMotion) { _, _ in store.persistSettings() }
-        .onChange(of: store.requirePIN) { _, _ in store.persistSettings() }
+        .onChange(of: store.requirePIN) { _, newValue in
+            store.persistSettings()
+            if newValue {
+                securityDialog = .requirePIN
+            }
+        }
         .onChange(of: store.autoAcceptFavorites) { _, _ in store.persistSettings() }
-        .onChange(of: store.allowDownloads) { _, _ in store.persistSettings() }
-        .onChange(of: store.endToEndEncryption) { _, _ in store.persistSettings() }
+        .onChange(of: store.allowDownloads) { _, newValue in
+            store.persistSettings()
+            if newValue {
+                securityDialog = .allowDownloads
+            }
+        }
+        .onChange(of: store.endToEndEncryption) { _, newValue in
+            store.persistSettings()
+            if !newValue {
+                securityDialog = .encryptionDisabled
+            }
+        }
+    }
+
+    private func chooseSaveLocation() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.directoryURL = URL(fileURLWithPath: store.saveLocation)
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        store.updateSaveLocation(url)
+        saveLocationPulse = true
+        Task {
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                saveLocationPulse = false
+            }
+        }
     }
 }
 
 private struct AccentSwatchRow: View {
-    private let swatches: [Color] = [
-        AccentColor.primary,
-        Color(nsColor: .systemBlue),
-        Color(nsColor: .systemOrange),
-        Color(nsColor: .systemPurple)
-    ]
+    @Binding var selection: AccentColorChoice
+    @State private var hovering: AccentColorChoice?
 
     var body: some View {
         HStack(spacing: Spacing.xs) {
-            ForEach(swatches.indices, id: \.self) { index in
-                Circle()
-                    .fill(swatches[index])
-                    .frame(width: 20, height: 20)
-                    .overlay {
-                        if index == 0 {
-                            Circle()
-                                .strokeBorder(AccentColor.primary, lineWidth: 1.5)
-                                .padding(-3.5)
+            ForEach(AccentColorChoice.allCases) { accent in
+                Button {
+                    selection = accent
+                } label: {
+                    Circle()
+                        .fill(accent.swatchColor)
+                        .frame(width: 22, height: 22)
+                        .overlay {
+                            if selection == accent {
+                                Image(systemName: "checkmark")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundStyle(.white)
+                            }
                         }
-                    }
+                        .overlay {
+                            Circle()
+                                .strokeBorder(
+                                    selection == accent || hovering == accent ? accent.swatchColor : Color(nsColor: .separatorColor),
+                                    lineWidth: selection == accent ? 2 : 1
+                                )
+                                .padding(selection == accent ? -4 : -2)
+                        }
+                }
+                .buttonStyle(.plain)
+                .help(accent.label)
+                .onHover { hovering = $0 ? accent : nil }
             }
+        }
+    }
+}
+
+private enum SecurityDialog: Identifiable {
+    case requirePIN
+    case allowDownloads
+    case encryptionDisabled
+
+    var id: String {
+        switch self {
+        case .requirePIN: "requirePIN"
+        case .allowDownloads: "allowDownloads"
+        case .encryptionDisabled: "encryptionDisabled"
+        }
+    }
+
+    var message: String {
+        switch self {
+        case .requirePIN:
+            return "Incoming transfers will require a PIN before files are accepted."
+        case .allowDownloads:
+            return "Nearby devices may request files that this device exposes through the transfer runtime."
+        case .encryptionDisabled:
+            return "Transfers may be less private when encryption is disabled."
+        }
+    }
+}
+
+private extension AccentColorChoice {
+    var swatchColor: Color {
+        switch self {
+        case .green:
+            return AccentColor.primary
+        case .blue:
+            return Color(nsColor: .systemBlue)
+        case .orange:
+            return Color(nsColor: .systemOrange)
+        case .purple:
+            return Color(nsColor: .systemPurple)
         }
     }
 }

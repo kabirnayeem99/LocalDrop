@@ -37,8 +37,7 @@ final class FeatureTransferTests: XCTestCase {
 
         await store.start()
 
-        // Give the observation tasks a turn on the main actor.
-        await Task.yield()
+        await waitUntil { store.activeSheet == .incoming }
 
         XCTAssertEqual(store.activeSheet, .incoming)
         XCTAssertEqual(store.incomingRequest?.id, "incoming")
@@ -64,9 +63,30 @@ final class FeatureTransferTests: XCTestCase {
         XCTAssertEqual(persisted?.protocolSettings.requirePIN, true)
         XCTAssertEqual(persisted?.protocolSettings.allowDownloads, false)
 
-        let updated = await runtime.lastUpdatedSettings
+        let updated = await waitForRuntimeSettings(runtime)
         XCTAssertEqual(updated?.requirePIN, true)
         XCTAssertEqual(updated?.allowDownloads, false)
+    }
+
+    private func waitUntil(
+        _ predicate: @escaping @MainActor () -> Bool,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        for _ in 0..<20 where !predicate() {
+            await Task.yield()
+        }
+        XCTAssertTrue(predicate(), file: file, line: line)
+    }
+
+    private func waitForRuntimeSettings(_ runtime: FakeTransferRuntime) async -> TransferProtocolSettings? {
+        for _ in 0..<20 {
+            if let settings = await runtime.lastUpdatedSettings {
+                return settings
+            }
+            await Task.yield()
+        }
+        return await runtime.lastUpdatedSettings
     }
 }
 

@@ -114,6 +114,27 @@ struct IncomingTransferRequest: Identifiable, Equatable, Sendable {
     let files: [IncomingTransferFile]
 }
 
+struct TransferFeedback: Identifiable, Equatable, Sendable {
+    enum Tone: String, Codable, Sendable {
+        case neutral
+        case success
+        case pending
+        case destructive
+    }
+
+    let id: UUID
+    let message: String
+    let symbol: String
+    let tone: Tone
+
+    init(id: UUID = UUID(), message: String, symbol: String, tone: Tone = .neutral) {
+        self.id = id
+        self.message = message
+        self.symbol = symbol
+        self.tone = tone
+    }
+}
+
 enum IncomingTransferDecision: Equatable, Sendable {
     case reject(requestID: String)
     case acceptAll(requestID: String)
@@ -213,9 +234,28 @@ struct TransferProtocolSettings: Codable, Equatable, Sendable {
     var saveLocation: URL
 }
 
+enum AccentColorChoice: String, CaseIterable, Codable, Identifiable, Sendable {
+    case green
+    case blue
+    case orange
+    case purple
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .green: "Green"
+        case .blue: "Blue"
+        case .orange: "Orange"
+        case .purple: "Purple"
+        }
+    }
+}
+
 struct TransferSettingsSnapshot: Codable, Equatable, Sendable {
     var quickSave: QuickSaveMode
     var appearance: AppearanceSetting
+    var accentColor: AccentColorChoice
     var language: LanguageSetting
     var minimizeToMenuBar: Bool
     var launchAtLogin: Bool
@@ -223,10 +263,71 @@ struct TransferSettingsSnapshot: Codable, Equatable, Sendable {
     var autoAcceptFavorites: Bool
     var protocolSettings: TransferProtocolSettings
 
+    enum CodingKeys: String, CodingKey {
+        case quickSave
+        case appearance
+        case accentColor
+        case language
+        case minimizeToMenuBar
+        case launchAtLogin
+        case reduceMotion
+        case autoAcceptFavorites
+        case protocolSettings
+    }
+
+    init(
+        quickSave: QuickSaveMode,
+        appearance: AppearanceSetting,
+        accentColor: AccentColorChoice = .green,
+        language: LanguageSetting,
+        minimizeToMenuBar: Bool,
+        launchAtLogin: Bool,
+        reduceMotion: Bool,
+        autoAcceptFavorites: Bool,
+        protocolSettings: TransferProtocolSettings
+    ) {
+        self.quickSave = quickSave
+        self.appearance = appearance
+        self.accentColor = accentColor
+        self.language = language
+        self.minimizeToMenuBar = minimizeToMenuBar
+        self.launchAtLogin = launchAtLogin
+        self.reduceMotion = reduceMotion
+        self.autoAcceptFavorites = autoAcceptFavorites
+        self.protocolSettings = protocolSettings
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        quickSave = try container.decode(QuickSaveMode.self, forKey: .quickSave)
+        appearance = try container.decode(AppearanceSetting.self, forKey: .appearance)
+        accentColor = try container.decodeIfPresent(AccentColorChoice.self, forKey: .accentColor) ?? .green
+        language = try container.decode(LanguageSetting.self, forKey: .language)
+        minimizeToMenuBar = try container.decode(Bool.self, forKey: .minimizeToMenuBar)
+        launchAtLogin = try container.decode(Bool.self, forKey: .launchAtLogin)
+        reduceMotion = try container.decode(Bool.self, forKey: .reduceMotion)
+        autoAcceptFavorites = try container.decode(Bool.self, forKey: .autoAcceptFavorites)
+        protocolSettings = try container.decode(TransferProtocolSettings.self, forKey: .protocolSettings)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(quickSave, forKey: .quickSave)
+        try container.encode(appearance, forKey: .appearance)
+        try container.encode(accentColor, forKey: .accentColor)
+        try container.encode(language, forKey: .language)
+        try container.encode(minimizeToMenuBar, forKey: .minimizeToMenuBar)
+        try container.encode(launchAtLogin, forKey: .launchAtLogin)
+        try container.encode(reduceMotion, forKey: .reduceMotion)
+        try container.encode(autoAcceptFavorites, forKey: .autoAcceptFavorites)
+        try container.encode(protocolSettings, forKey: .protocolSettings)
+    }
+
     static func `default`(deviceName: String, saveLocation: URL) -> Self {
         Self(
             quickSave: .on,
             appearance: .system,
+            accentColor: .green,
             language: .system,
             minimizeToMenuBar: false,
             launchAtLogin: true,

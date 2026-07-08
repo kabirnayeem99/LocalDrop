@@ -7,6 +7,7 @@ final class TransferFeatureStore {
     var screen: Screen = .receive
     var quickSave: QuickSaveMode
     var appearance: AppearanceSetting
+    var accentColor: AccentColorChoice
     var language: LanguageSetting
     var minimizeToMenuBar: Bool
     var launchAtLogin: Bool
@@ -25,11 +26,19 @@ final class TransferFeatureStore {
     var historyEntries: [HistoryEntry]
     var incomingRequest: IncomingTransferRequest?
     var activeTransfer: ActiveTransferProgress?
+    var feedback: TransferFeedback?
+    var isRefreshingDiscovery = false
+    var isScanningDiscovery = false
     var lastErrorMessage: String?
     private let runtime: any TransferRuntime
     private let settingsPersistence: any TransferSettingsPersisting
     private var hasStarted = false
-    private var observationTasks: [Task<Void, Never>] = []
+    @ObservationIgnored
+    nonisolated(unsafe) private var observationTasks: [Task<Void, Never>] = []
+    @ObservationIgnored
+    nonisolated(unsafe) private var progressCompletionTask: Task<Void, Never>?
+    @ObservationIgnored
+    nonisolated(unsafe) private var feedbackDismissTask: Task<Void, Never>?
 
     init(
         runtime: any TransferRuntime,
@@ -41,6 +50,7 @@ final class TransferFeatureStore {
         self.settingsPersistence = settingsPersistence
         self.quickSave = snapshot.quickSave
         self.appearance = snapshot.appearance
+        self.accentColor = snapshot.accentColor
         self.language = snapshot.language
         self.minimizeToMenuBar = snapshot.minimizeToMenuBar
         self.launchAtLogin = snapshot.launchAtLogin
@@ -53,6 +63,12 @@ final class TransferFeatureStore {
         self.allowDownloads = snapshot.protocolSettings.allowDownloads
         self.endToEndEncryption = snapshot.protocolSettings.endToEndEncryption
         self.historyEntries = historyEntries
+    }
+
+    deinit {
+        observationTasks.forEach { $0.cancel() }
+        progressCompletionTask?.cancel()
+        feedbackDismissTask?.cancel()
     }
 
     var activeSheet: ActiveSheet? {
@@ -100,12 +116,40 @@ final class TransferFeatureStore {
     }
 
     func stop() async {
+        cancelProgressCompletionTask()
         await runtime.stop()
     }
 
     func refreshNearbyPeers() {
+        refreshDiscovery(shouldShowFeedback: true, scan: false)
+    }
+
+    func scanNearbyPeers() {
+        refreshDiscovery(shouldShowFeedback: true, scan: true)
+    }
+
+    private func refreshDiscovery(shouldShowFeedback: Bool, scan: Bool) {
+        if scan {
+            isScanningDiscovery = true
+        } else {
+            isRefreshingDiscovery = true
+        }
         Task {
             await runtime.refreshDiscovery()
+            if scan {
+                isScanningDiscovery = false
+            } else {
+                isRefreshingDiscovery = false
+            }
+            if shouldShowFeedback {
+                showFeedback(
+                    TransferFeedback(
+                        message: scan ? "Discovery scan started" : "Discovery refreshed",
+                        symbol: scan ? "dot.radiowaves.left.and.right" : "arrow.clockwise",
+                        tone: .neutral
+                    )
+                )
+            }
         }
     }
 
@@ -115,6 +159,13 @@ final class TransferFeatureStore {
         Task {
             await runtime.stage(staged)
         }
+        showFeedback(
+            TransferFeedback(
+                message: staged.count == 1 ? "File staged" : "\(staged.count) items staged",
+                symbol: "checkmark.circle.fill",
+                tone: .success
+            )
+        )
     }
 
     func removeStagedItem(id: StagedTransferItem.ID) {
@@ -138,6 +189,9 @@ final class TransferFeatureStore {
     func declineIncomingRequest() {
         guard let request = incomingRequest else { return }
         incomingRequest = nil
+        showFeedback(
+            TransferFeedback(message: "Transfer declined", symbol: "xmark.circle.fill", tone: .destructive)
+        )
         Task {
             try? await runtime.respondToIncomingRequest(.reject(requestID: request.id))
         }
@@ -146,17 +200,41 @@ final class TransferFeatureStore {
     func acceptIncomingRequest() {
         guard let request = incomingRequest else { return }
         incomingRequest = nil
+        showFeedback(
+            TransferFeedback(message: "Transfer accepted", symbol: "checkmark.circle.fill", tone: .success)
+        )
         Task {
             try? await runtime.respondToIncomingRequest(.acceptAll(requestID: request.id))
         }
     }
 
+    func acceptIncomingRequest(fileIDs: Set<String>) {
+        guard let request = incomingRequest else { return }
+        incomingRequest = nil
+        let acceptedCount = fileIDs.count
+        showFeedback(
+            TransferFeedback(
+                message: acceptedCount == request.files.count ? "Transfer accepted" : "\(acceptedCount) files accepted",
+                symbol: "checkmark.circle.fill",
+                tone: .success
+            )
+        )
+        Task {
+            try? await runtime.respondToIncomingRequest(.acceptSubset(requestID: request.id, fileIDs: fileIDs))
+        }
+    }
+
     func dismissProgress() {
+        cancelProgressCompletionTask()
         activeTransfer = nil
     }
 
     func cancelActiveTransfer() {
         guard let activeTransfer else { return }
+        cancelProgressCompletionTask()
+        showFeedback(
+            TransferFeedback(message: "Transfer canceled", symbol: "xmark.circle.fill", tone: .destructive)
+        )
         Task {
             try? await runtime.cancelActiveTransfer(activeTransfer.id)
             self.activeTransfer = nil
@@ -169,9 +247,27 @@ final class TransferFeatureStore {
 
     func persistSettings() {
         settingsPersistence.save(makeSnapshot())
+        showFeedback(
+            TransferFeedback(message: "Settings saved", symbol: "checkmark.circle.fill", tone: .success)
+        )
         Task {
-            try? await runtime.updateSettings(currentProtocolSettings)
+            do {
+                try await runtime.updateSettings(currentProtocolSettings)
+            } catch {
+                lastErrorMessage = error.localizedDescription
+                showFeedback(
+                    TransferFeedback(message: "Settings could not be applied", symbol: "exclamationmark.triangle.fill", tone: .destructive)
+                )
+            }
         }
+    }
+
+    func updateSaveLocation(_ url: URL) {
+        saveLocation = url.path
+        persistSettings()
+        showFeedback(
+            TransferFeedback(message: "Save location changed", symbol: "folder.fill", tone: .success)
+        )
     }
 
     private func bindRuntimeStreamsIfNeeded() {
@@ -196,16 +292,57 @@ final class TransferFeatureStore {
                 guard let self else { return }
                 let stream = await self.runtime.progressEvents()
                 for await progress in stream {
+                    self.cancelProgressCompletionTask()
                     self.activeTransfer = progress
+                    if progress.progress >= 1 {
+                        self.showFeedback(
+                            TransferFeedback(
+                                message: "Transfer completed",
+                                symbol: "checkmark.circle.fill",
+                                tone: .success
+                            )
+                        )
+                        self.scheduleProgressCompletionDismiss(for: progress)
+                    }
                 }
             }
         ]
+    }
+
+    private func scheduleProgressCompletionDismiss(for progress: ActiveTransferProgress) {
+        progressCompletionTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 850_000_000)
+            guard !Task.isCancelled else { return }
+            if self?.activeTransfer?.id == progress.id {
+                self?.activeTransfer = nil
+                self?.progressCompletionTask = nil
+            }
+        }
+    }
+
+    private func cancelProgressCompletionTask() {
+        progressCompletionTask?.cancel()
+        progressCompletionTask = nil
+    }
+
+    private func showFeedback(_ newFeedback: TransferFeedback) {
+        feedbackDismissTask?.cancel()
+        feedback = newFeedback
+        feedbackDismissTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 2_400_000_000)
+            guard !Task.isCancelled else { return }
+            if self?.feedback?.id == newFeedback.id {
+                self?.feedback = nil
+                self?.feedbackDismissTask = nil
+            }
+        }
     }
 
     private func makeSnapshot() -> TransferSettingsSnapshot {
         TransferSettingsSnapshot(
             quickSave: quickSave,
             appearance: appearance,
+            accentColor: accentColor,
             language: language,
             minimizeToMenuBar: minimizeToMenuBar,
             launchAtLogin: launchAtLogin,

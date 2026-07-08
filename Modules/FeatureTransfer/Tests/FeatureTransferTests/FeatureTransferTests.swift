@@ -68,15 +68,162 @@ final class FeatureTransferTests: XCTestCase {
         XCTAssertEqual(updated?.allowDownloads, false)
     }
 
+    func testMenuSummaryReflectsRuntimeIncomingAndTransferStates() async {
+        let runtime = FakeTransferRuntime()
+        let store = TransferFeatureStore(
+            runtime: runtime,
+            settingsPersistence: InMemorySettingsPersistence(),
+            snapshot: .default(
+                deviceName: "LocalDrop Test Mac",
+                saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
+            ),
+            historyEntries: [
+                makeHistoryEntry(fileName: "one.txt"),
+                makeHistoryEntry(fileName: "two.txt"),
+                makeHistoryEntry(fileName: "three.txt"),
+                makeHistoryEntry(fileName: "four.txt"),
+                makeHistoryEntry(fileName: "five.txt"),
+                makeHistoryEntry(fileName: "six.txt")
+            ]
+        )
+
+        XCTAssertEqual(store.menuSummary.statusSymbol, "paperplane.circle")
+        XCTAssertEqual(store.menuSummary.recentHistoryEntries.map(\.fileName), [
+            "one.txt",
+            "two.txt",
+            "three.txt",
+            "four.txt",
+            "five.txt"
+        ])
+
+        store.isRuntimeAvailable = true
+        store.runtimeStatusText = "Discoverable"
+        XCTAssertEqual(store.menuSummary.statusSymbol, "paperplane")
+        XCTAssertEqual(store.menuSummary.statusText, "Discoverable")
+
+        await runtime.emitProgress(
+            ActiveTransferProgress(
+                id: "progress",
+                direction: .sending,
+                counterpartName: "Peer",
+                fileName: "report.pdf",
+                progress: 0.42,
+                throughput: "1 MB/s",
+                etaDescription: "Soon"
+            )
+        )
+        await store.start()
+        await waitUntil { store.activeTransfer != nil }
+
+        XCTAssertEqual(store.menuSummary.statusSymbol, "paperplane.fill")
+        XCTAssertEqual(store.menuSummary.activeTransferTitle, "Sending report.pdf 42%")
+
+        await runtime.emitIncomingRequest(
+            IncomingTransferRequest(
+                id: "incoming",
+                deviceName: "Peer Mac",
+                subtitle: "Peer Mac · 1 item",
+                sourceKind: .macbook,
+                files: [IncomingTransferFile(id: "file", name: "notes.txt", size: "1 KB", symbol: "doc")]
+            )
+        )
+        await waitUntil { store.incomingRequest != nil }
+
+        XCTAssertEqual(store.menuSummary.statusSymbol, "paperplane.badge.clock")
+        XCTAssertEqual(store.menuSummary.incomingRequestTitle, "Peer Mac wants to send 1 file")
+        XCTAssertEqual(store.menuSummary.statusText, "Incoming request from Peer Mac")
+    }
+
+    func testMenuActionsDriveRuntimeAndStoreIntegration() async {
+        let runtime = FakeTransferRuntime()
+        let persistence = InMemorySettingsPersistence()
+        let store = TransferFeatureStore(
+            runtime: runtime,
+            settingsPersistence: persistence,
+            snapshot: .default(
+                deviceName: "LocalDrop Test Mac",
+                saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
+            )
+        )
+
+        await store.start()
+        store.refreshNearbyPeers()
+        await waitUntil { await runtime.refreshDiscoveryCallCount >= 2 }
+
+        let fileURL = URL(fileURLWithPath: "/tmp/LocalDropTests/report.pdf")
+        store.stageDroppedItems([fileURL])
+        await waitUntil { await runtime.stagedItems.map(\.fileURL) == [fileURL] }
+
+        store.nearbyPeers = [
+            NearbyPeerItem(
+                id: "peer-id",
+                host: "192.168.1.20",
+                name: "Peer Mac",
+                subtitle: "Ready",
+                kind: .macbook,
+                fingerprint: "peer-id",
+                protocolType: nil,
+                port: 53317,
+                supportsDownloads: true
+            )
+        ]
+        XCTAssertTrue(store.menuSummary.canSendToPeers)
+
+        store.send(to: "peer-id")
+        await waitUntil { await runtime.sentPeerIDs == ["peer-id"] }
+
+        let request = IncomingTransferRequest(
+            id: "request-id",
+            deviceName: "Peer Mac",
+            subtitle: "Peer Mac · 1 item",
+            sourceKind: .macbook,
+            files: [IncomingTransferFile(id: "file", name: "notes.txt", size: "1 KB", symbol: "doc")]
+        )
+        await runtime.emitIncomingRequest(request)
+        await waitUntil { store.incomingRequest?.id == "request-id" }
+        store.acceptIncomingRequest()
+        await waitUntil { await runtime.responses == [.acceptAll(requestID: "request-id")] }
+
+        store.activeTransfer = ActiveTransferProgress(
+            id: "transfer-id",
+            direction: .receiving,
+            counterpartName: "Peer Mac",
+            fileName: "notes.txt",
+            progress: 0.2,
+            throughput: "1 MB/s",
+            etaDescription: "Soon"
+        )
+        store.cancelActiveTransfer()
+        await waitUntil { await runtime.canceledTransferIDs == ["transfer-id"] }
+
+        store.updateQuickSave(.off)
+        XCTAssertEqual(persistence.savedSnapshots.last?.quickSave, .off)
+
+        store.clearHistory()
+        XCTAssertTrue(store.historyEntries.isEmpty)
+    }
+
     private func waitUntil(
-        _ predicate: @escaping @MainActor () -> Bool,
+        _ predicate: @escaping @MainActor () async -> Bool,
         file: StaticString = #filePath,
         line: UInt = #line
     ) async {
-        for _ in 0..<20 where !predicate() {
+        for _ in 0..<20 where !(await predicate()) {
             await Task.yield()
         }
-        XCTAssertTrue(predicate(), file: file, line: line)
+        let result = await predicate()
+        XCTAssertTrue(result, file: file, line: line)
+    }
+
+    private func makeHistoryEntry(fileName: String) -> HistoryEntry {
+        HistoryEntry(
+            fileName: fileName,
+            counterpart: "Peer",
+            size: "1 KB",
+            timestamp: "Today",
+            direction: .received,
+            outcome: .completed
+        )
     }
 
     private func waitForRuntimeSettings(_ runtime: FakeTransferRuntime) async -> TransferProtocolSettings? {
@@ -95,18 +242,23 @@ private actor FakeTransferRuntime: TransferRuntime {
     private let incomingBroadcaster = TestBroadcaster<IncomingTransferRequest>()
     private let progressBroadcaster = TestBroadcaster<ActiveTransferProgress>()
     private(set) var lastUpdatedSettings: TransferProtocolSettings?
+    private(set) var refreshDiscoveryCallCount = 0
+    private(set) var stagedItems: [StagedTransferItem] = []
+    private(set) var sentPeerIDs: [NearbyPeerItem.ID] = []
+    private(set) var responses: [IncomingTransferDecision] = []
+    private(set) var canceledTransferIDs: [ActiveTransferProgress.ID] = []
 
     func start() async throws {}
     func stop() async {}
-    func refreshDiscovery() async {}
+    func refreshDiscovery() async { refreshDiscoveryCallCount += 1 }
     func discoveredPeers() async -> AsyncStream<[NearbyPeerItem]> { await peersBroadcaster.stream() }
     func inboundRequests() async -> AsyncStream<IncomingTransferRequest> { await incomingBroadcaster.stream() }
     func progressEvents() async -> AsyncStream<ActiveTransferProgress> { await progressBroadcaster.stream() }
     func updateSettings(_ settings: TransferProtocolSettings) async throws { lastUpdatedSettings = settings }
-    func stage(_ items: [StagedTransferItem]) async {}
-    func sendStagedItems(to peerID: NearbyPeerItem.ID, pin: String?) async throws {}
-    func respondToIncomingRequest(_ response: IncomingTransferDecision) async throws {}
-    func cancelActiveTransfer(_ id: ActiveTransferProgress.ID) async throws {}
+    func stage(_ items: [StagedTransferItem]) async { stagedItems = items }
+    func sendStagedItems(to peerID: NearbyPeerItem.ID, pin: String?) async throws { sentPeerIDs.append(peerID) }
+    func respondToIncomingRequest(_ response: IncomingTransferDecision) async throws { responses.append(response) }
+    func cancelActiveTransfer(_ id: ActiveTransferProgress.ID) async throws { canceledTransferIDs.append(id) }
 
     func emitIncomingRequest(_ request: IncomingTransferRequest) async {
         await incomingBroadcaster.yield(request)

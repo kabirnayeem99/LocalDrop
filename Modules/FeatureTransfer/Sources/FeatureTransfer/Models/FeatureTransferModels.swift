@@ -168,12 +168,12 @@ struct ActiveTransferProgress: Identifiable, Equatable, Sendable {
     let etaDescription: String
 }
 
-enum TransferDirection: Sendable {
+enum TransferDirection: Equatable, Sendable {
     case sent
     case received
 }
 
-enum TransferOutcome: Sendable {
+enum TransferOutcome: Equatable, Sendable {
     case completed
     case declined
 

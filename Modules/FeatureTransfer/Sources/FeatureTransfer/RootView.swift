@@ -89,12 +89,16 @@ struct RootView: View {
         switch store.screen {
         case .receive:
             ReceiveView(store: store)
+                .accessibilityIdentifier("screen-receive")
         case .send:
             SendView(store: store)
+                .accessibilityIdentifier("screen-send")
         case .history:
             HistoryView(store: store)
+                .accessibilityIdentifier("screen-history")
         case .settings:
             SettingsView(store: store)
+                .accessibilityIdentifier("screen-settings")
         }
     }
 

@@ -32,6 +32,17 @@ targets:
       - path: Tests/LocalDropAppTests
     dependencies:
       - target: LocalDrop
+  LocalDropAppUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - path: Tests/LocalDropAppUITests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.localdrop.LocalDropUITests
+        TEST_TARGET_NAME: LocalDrop
+    dependencies:
+      - target: LocalDrop
 schemes:
   LocalDrop:
     build:
@@ -43,3 +54,4 @@ schemes:
       config: Debug
       targets:
         - LocalDropAppTests
+        - LocalDropAppUITests

@@ -19,7 +19,7 @@ final class TransferFeatureStore {
     var requirePIN: Bool
     var incomingPIN: String
     var allowDownloads: Bool
-    var endToEndEncryption: Bool
+    var useHTTPS: Bool
     var isRuntimeAvailable = false
     var runtimeStatusText = "Starting LocalDrop runtime…"
     var nearbyPeers: [NearbyPeerItem] = []
@@ -63,7 +63,7 @@ final class TransferFeatureStore {
         self.requirePIN = snapshot.protocolSettings.requirePIN
         self.incomingPIN = snapshot.protocolSettings.incomingPIN
         self.allowDownloads = snapshot.protocolSettings.allowDownloads
-        self.endToEndEncryption = snapshot.protocolSettings.endToEndEncryption
+        self.useHTTPS = snapshot.protocolSettings.useHTTPS
         self.historyEntries = historyEntries
     }
 
@@ -95,7 +95,7 @@ final class TransferFeatureStore {
             requirePIN: requirePIN,
             incomingPIN: resolvedIncomingPIN,
             allowDownloads: allowDownloads,
-            endToEndEncryption: endToEndEncryption,
+            useHTTPS: useHTTPS,
             saveLocation: URL(fileURLWithPath: saveLocation)
         )
     }

@@ -2,6 +2,12 @@ import SwiftUI
 import DesignSystem
 import AppKit
 
+enum TransferSecurityCopy {
+    static let httpsToggleTitle = "Use HTTPS for transfers"
+    static let httpsToggleHelp = "Encrypt transfer traffic with HTTPS. Turn this off to use plain HTTP on the local network."
+    static let httpsDisabledMessage = "Transfers on this device will use plain HTTP on the local network until HTTPS is turned back on."
+}
+
 struct SettingsView: View {
     @Bindable var store: TransferFeatureStore
     @State private var saveLocationPulse = false
@@ -101,8 +107,8 @@ struct SettingsView: View {
                 }
                 Toggle("Allow downloads", isOn: $store.allowDownloads)
                     .help("Allows peers to fetch files exposed by this device.")
-                Toggle("End-to-end encryption", isOn: $store.endToEndEncryption)
-                    .help("Keeps transfer traffic encrypted when supported by the runtime.")
+                Toggle(TransferSecurityCopy.httpsToggleTitle, isOn: $store.useHTTPS)
+                    .help(TransferSecurityCopy.httpsToggleHelp)
             }
         }
         .formStyle(.grouped)
@@ -144,10 +150,10 @@ struct SettingsView: View {
                 securityDialog = .allowDownloads
             }
         }
-        .onChange(of: store.endToEndEncryption) { _, newValue in
+        .onChange(of: store.useHTTPS) { _, newValue in
             store.persistSettings()
             if !newValue {
-                securityDialog = .encryptionDisabled
+                securityDialog = .httpsDisabled
             }
         }
     }
@@ -255,13 +261,13 @@ private struct AccentSwatchRow: View {
 private enum SecurityDialog: Identifiable {
     case requirePIN
     case allowDownloads
-    case encryptionDisabled
+    case httpsDisabled
 
     var id: String {
         switch self {
         case .requirePIN: "requirePIN"
         case .allowDownloads: "allowDownloads"
-        case .encryptionDisabled: "encryptionDisabled"
+        case .httpsDisabled: "httpsDisabled"
         }
     }
 
@@ -271,8 +277,8 @@ private enum SecurityDialog: Identifiable {
             return "Incoming transfers will require a PIN before files are accepted."
         case .allowDownloads:
             return "Nearby devices may request files that this device exposes through the transfer runtime."
-        case .encryptionDisabled:
-            return "Transfers may be less private when encryption is disabled."
+        case .httpsDisabled:
+            return TransferSecurityCopy.httpsDisabledMessage
         }
     }
 }

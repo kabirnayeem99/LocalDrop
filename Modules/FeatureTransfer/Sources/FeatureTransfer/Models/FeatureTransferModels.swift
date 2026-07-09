@@ -231,7 +231,7 @@ struct TransferProtocolSettings: Codable, Equatable, Sendable {
     var requirePIN: Bool
     var incomingPIN: String
     var allowDownloads: Bool
-    var endToEndEncryption: Bool
+    var useHTTPS: Bool
     var saveLocation: URL
 
     enum CodingKeys: String, CodingKey {
@@ -240,8 +240,12 @@ struct TransferProtocolSettings: Codable, Equatable, Sendable {
         case requirePIN
         case incomingPIN
         case allowDownloads
-        case endToEndEncryption
+        case useHTTPS = "endToEndEncryption"
         case saveLocation
+    }
+
+    enum AlternateCodingKeys: String, CodingKey {
+        case useHTTPS
     }
 
     init(
@@ -250,7 +254,7 @@ struct TransferProtocolSettings: Codable, Equatable, Sendable {
         requirePIN: Bool,
         incomingPIN: String,
         allowDownloads: Bool,
-        endToEndEncryption: Bool,
+        useHTTPS: Bool,
         saveLocation: URL
     ) {
         self.deviceName = deviceName
@@ -258,12 +262,13 @@ struct TransferProtocolSettings: Codable, Equatable, Sendable {
         self.requirePIN = requirePIN
         self.incomingPIN = Self.normalizedIncomingPIN(from: incomingPIN) ?? Self.generateIncomingPIN()
         self.allowDownloads = allowDownloads
-        self.endToEndEncryption = endToEndEncryption
+        self.useHTTPS = useHTTPS
         self.saveLocation = saveLocation
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        let alternateContainer = try decoder.container(keyedBy: AlternateCodingKeys.self)
         deviceName = try container.decode(String.self, forKey: .deviceName)
         tcpPort = try container.decode(Int.self, forKey: .tcpPort)
         requirePIN = try container.decode(Bool.self, forKey: .requirePIN)
@@ -271,7 +276,10 @@ struct TransferProtocolSettings: Codable, Equatable, Sendable {
             from: try container.decodeIfPresent(String.self, forKey: .incomingPIN)
         ) ?? Self.generateIncomingPIN()
         allowDownloads = try container.decode(Bool.self, forKey: .allowDownloads)
-        endToEndEncryption = try container.decode(Bool.self, forKey: .endToEndEncryption)
+        useHTTPS =
+            try container.decodeIfPresent(Bool.self, forKey: .useHTTPS)
+            ?? alternateContainer.decodeIfPresent(Bool.self, forKey: .useHTTPS)
+            ?? true
         saveLocation = try container.decode(URL.self, forKey: .saveLocation)
     }
 
@@ -282,7 +290,7 @@ struct TransferProtocolSettings: Codable, Equatable, Sendable {
         try container.encode(requirePIN, forKey: .requirePIN)
         try container.encode(Self.normalizedIncomingPIN(from: incomingPIN) ?? Self.generateIncomingPIN(), forKey: .incomingPIN)
         try container.encode(allowDownloads, forKey: .allowDownloads)
-        try container.encode(endToEndEncryption, forKey: .endToEndEncryption)
+        try container.encode(useHTTPS, forKey: .useHTTPS)
         try container.encode(saveLocation, forKey: .saveLocation)
     }
 
@@ -300,7 +308,7 @@ struct TransferProtocolSettings: Codable, Equatable, Sendable {
     }
 
     var protocolType: ProtocolType {
-        endToEndEncryption ? .https : .http
+        useHTTPS ? .https : .http
     }
 }
 
@@ -409,7 +417,7 @@ struct TransferSettingsSnapshot: Codable, Equatable, Sendable {
                 requirePIN: false,
                 incomingPIN: TransferProtocolSettings.generateIncomingPIN(),
                 allowDownloads: true,
-                endToEndEncryption: true,
+                useHTTPS: true,
                 saveLocation: saveLocation
             )
         )

@@ -1,5 +1,6 @@
 import XCTest
 @testable import FeatureTransfer
+import LocalSendKit
 
 @MainActor
 final class FeatureTransferTests: XCTestCase {
@@ -57,13 +58,13 @@ final class FeatureTransferTests: XCTestCase {
 
         store.requirePIN = true
         store.allowDownloads = false
-        store.endToEndEncryption = false
+        store.useHTTPS = false
         store.persistSettings()
 
         let persisted = persistence.savedSnapshots.last
         XCTAssertEqual(persisted?.protocolSettings.requirePIN, true)
         XCTAssertEqual(persisted?.protocolSettings.allowDownloads, false)
-        XCTAssertEqual(persisted?.protocolSettings.endToEndEncryption, false)
+        XCTAssertEqual(persisted?.protocolSettings.useHTTPS, false)
 
         let updated = await waitForRuntimeSettings(runtime)
         XCTAssertEqual(updated?.requirePIN, true)
@@ -79,15 +80,63 @@ final class FeatureTransferTests: XCTestCase {
             requirePIN: false,
             incomingPIN: "123456",
             allowDownloads: true,
-            endToEndEncryption: true,
+            useHTTPS: true,
             saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
         )
 
         XCTAssertEqual(settings.protocolType, .https)
 
-        settings.endToEndEncryption = false
+        settings.useHTTPS = false
 
         XCTAssertEqual(settings.protocolType, .http)
+    }
+
+    func testProtocolSettingsDecodeLegacyAndCanonicalHTTPSKeys() throws {
+        let legacyPayload = """
+        {
+          "deviceName":"LocalDrop Test Mac",
+          "tcpPort":53317,
+          "requirePIN":false,
+          "incomingPIN":"123456",
+          "allowDownloads":true,
+          "endToEndEncryption":false,
+          "saveLocation":"file:///tmp/LocalDropTests"
+        }
+        """
+        let canonicalPayload = """
+        {
+          "deviceName":"LocalDrop Test Mac",
+          "tcpPort":53317,
+          "requirePIN":false,
+          "incomingPIN":"123456",
+          "allowDownloads":true,
+          "useHTTPS":true,
+          "saveLocation":"file:///tmp/LocalDropTests"
+        }
+        """
+
+        let legacy = try JSONDecoder().decode(TransferProtocolSettings.self, from: Data(legacyPayload.utf8))
+        let canonical = try JSONDecoder().decode(TransferProtocolSettings.self, from: Data(canonicalPayload.utf8))
+
+        XCTAssertFalse(legacy.useHTTPS)
+        XCTAssertTrue(canonical.useHTTPS)
+    }
+
+    func testProtocolSettingsEncodePreservesLegacyPersistenceKey() throws {
+        let settings = TransferProtocolSettings(
+            deviceName: "LocalDrop Test Mac",
+            tcpPort: 53_317,
+            requirePIN: false,
+            incomingPIN: "123456",
+            allowDownloads: true,
+            useHTTPS: false,
+            saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
+        )
+
+        let json = try XCTUnwrap(String(data: JSONEncoder().encode(settings), encoding: .utf8))
+
+        XCTAssertTrue(json.contains("\"endToEndEncryption\":false"))
+        XCTAssertFalse(json.contains("\"useHTTPS\""))
     }
 
     func testDefaultSnapshotGeneratesValidIncomingPIN() {
@@ -170,6 +219,26 @@ final class FeatureTransferTests: XCTestCase {
         )
     }
 
+    func testPersistSettingsRepairsMissingPINWhenRequirementEnabled() {
+        let runtime = FakeTransferRuntime()
+        let persistence = InMemorySettingsPersistence()
+        let store = TransferFeatureStore(
+            runtime: runtime,
+            settingsPersistence: persistence,
+            snapshot: .default(
+                deviceName: "LocalDrop Test Mac",
+                saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
+            )
+        )
+
+        store.requirePIN = true
+        store.incomingPIN = ""
+        store.persistSettings()
+
+        XCTAssertEqual(store.incomingPIN.count, TransferProtocolSettings.incomingPINLength)
+        XCTAssertEqual(persistence.savedSnapshots.last?.protocolSettings.incomingPIN, store.incomingPIN)
+    }
+
     func testUpdateIncomingPINPersistsAndPushesRuntimeSettings() async {
         let runtime = FakeTransferRuntime()
         let persistence = InMemorySettingsPersistence()
@@ -211,6 +280,26 @@ final class FeatureTransferTests: XCTestCase {
         XCTAssertFalse(store.updateIncomingPIN("123"))
         XCTAssertEqual(store.incomingPIN, existingPIN)
         XCTAssertTrue(persistence.savedSnapshots.isEmpty)
+    }
+
+    func testPersistSettingsFailureSurfacesErrorFeedback() async {
+        let runtime = FakeTransferRuntime()
+        await runtime.setUpdateSettingsError(TestFailure.runtimeApplyFailed)
+        let store = TransferFeatureStore(
+            runtime: runtime,
+            settingsPersistence: InMemorySettingsPersistence(),
+            snapshot: .default(
+                deviceName: "LocalDrop Test Mac",
+                saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
+            )
+        )
+
+        store.useHTTPS = false
+        store.persistSettings()
+
+        await waitUntil { store.lastErrorMessage == TestFailure.runtimeApplyFailed.localizedDescription }
+        XCTAssertEqual(store.feedback?.tone, .destructive)
+        XCTAssertEqual(store.feedback?.message, "Settings could not be applied")
     }
 
     func testMenuSummaryReflectsRuntimeIncomingAndTransferStates() async {
@@ -327,7 +416,8 @@ final class FeatureTransferTests: XCTestCase {
         await runtime.emitIncomingRequest(request)
         await waitUntil { store.incomingRequest?.id == "request-id" }
         store.acceptIncomingRequest()
-        await waitUntil { await runtime.responses == [.acceptAll(requestID: "request-id")] }
+        let acceptAllResponse: FeatureTransfer.IncomingTransferDecision = .acceptAll(requestID: "request-id")
+        await waitUntil { await runtime.responses == [acceptAllResponse] }
 
         store.activeTransfer = ActiveTransferProgress(
             id: "transfer-id",
@@ -346,6 +436,148 @@ final class FeatureTransferTests: XCTestCase {
 
         store.clearHistory()
         XCTAssertTrue(store.historyEntries.isEmpty)
+    }
+
+    func testDeclineAndSubsetAcceptSendExpectedResponses() async {
+        let runtime = FakeTransferRuntime()
+        let store = TransferFeatureStore(
+            runtime: runtime,
+            settingsPersistence: InMemorySettingsPersistence(),
+            snapshot: .default(
+                deviceName: "LocalDrop Test Mac",
+                saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
+            )
+        )
+        let request = IncomingTransferRequest(
+            id: "request-id",
+            deviceName: "Peer Mac",
+            subtitle: "Peer Mac · 2 items",
+            sourceKind: .macbook,
+            files: [
+                IncomingTransferFile(id: "a", name: "a.txt", size: "1 KB", symbol: "doc"),
+                IncomingTransferFile(id: "b", name: "b.txt", size: "1 KB", symbol: "doc")
+            ]
+        )
+
+        await runtime.emitIncomingRequest(request)
+        await store.start()
+        await waitUntil { store.incomingRequest?.id == "request-id" }
+
+        let subsetResponse: FeatureTransfer.IncomingTransferDecision = .acceptSubset(
+            requestID: "request-id",
+            fileIDs: ["a"]
+        )
+        store.acceptIncomingRequest(fileIDs: ["a"])
+        await waitUntil { await runtime.responses == [subsetResponse] }
+
+        await runtime.emitIncomingRequest(request)
+        await waitUntil { store.incomingRequest?.id == "request-id" }
+
+        let rejectResponse: FeatureTransfer.IncomingTransferDecision = .reject(requestID: "request-id")
+        store.declineIncomingRequest()
+        await waitUntil { await runtime.responses == [subsetResponse, rejectResponse] }
+    }
+
+    func testDismissProgressClearsActiveTransferImmediately() {
+        let store = TransferFeatureStore(
+            runtime: FakeTransferRuntime(),
+            settingsPersistence: InMemorySettingsPersistence(),
+            snapshot: .default(
+                deviceName: "LocalDrop Test Mac",
+                saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
+            )
+        )
+
+        store.activeTransfer = ActiveTransferProgress(
+            id: "progress",
+            direction: .receiving,
+            counterpartName: "Peer",
+            fileName: "demo.txt",
+            progress: 0.5,
+            throughput: "1 MB/s",
+            etaDescription: "Soon"
+        )
+
+        store.dismissProgress()
+
+        XCTAssertNil(store.activeTransfer)
+    }
+
+    func testTransferSecurityCopyUsesHTTPAndHTTPSTerminology() {
+        XCTAssertEqual(TransferSecurityCopy.httpsToggleTitle, "Use HTTPS for transfers")
+        XCTAssertTrue(TransferSecurityCopy.httpsToggleHelp.contains("HTTPS"))
+        XCTAssertTrue(TransferSecurityCopy.httpsToggleHelp.contains("plain HTTP"))
+        XCTAssertTrue(TransferSecurityCopy.httpsDisabledMessage.contains("plain HTTP"))
+        XCTAssertFalse(TransferSecurityCopy.httpsDisabledMessage.localizedCaseInsensitiveContains("end-to-end"))
+    }
+
+    func testSettingsViewBodyBuildsWithHTTPSSetting() {
+        let store = TransferFeatureStore(
+            runtime: FakeTransferRuntime(),
+            settingsPersistence: InMemorySettingsPersistence(),
+            snapshot: .default(
+                deviceName: "LocalDrop Test Mac",
+                saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
+            )
+        )
+
+        _ = SettingsView(store: store).body
+        store.useHTTPS = false
+        _ = SettingsView(store: store).body
+    }
+
+    func testLocalSendRuntimeAdapterRestartSwitchesBetweenHTTPSAndHTTP() async throws {
+        let recorder = RuntimeComponentRecorder()
+        let initialSettings = TransferProtocolSettings(
+            deviceName: "LocalDrop Test Mac",
+            tcpPort: 0,
+            requirePIN: false,
+            incomingPIN: "123456",
+            allowDownloads: true,
+            useHTTPS: true,
+            saveLocation: makeTempDirectory()
+        )
+        let adapter = try makeLiveRuntimeAdapter(settings: initialSettings, recorder: recorder)
+
+        try await adapter.start()
+        defer { Task { await adapter.stop() } }
+
+        let initialRecordedNode = await recorder.lastNode()
+        let initialNode = try XCTUnwrap(initialRecordedNode)
+        let initialEndpoint = try await waitForRunningEndpoint(node: initialNode)
+        XCTAssertEqual(initialEndpoint.protocolType, .https)
+
+        var updatedSettings = initialSettings
+        updatedSettings.useHTTPS = false
+        updatedSettings.saveLocation = makeTempDirectory()
+        try await adapter.updateSettings(updatedSettings)
+
+        let restartedRecordedNode = await recorder.lastNode()
+        let restartedNode = try XCTUnwrap(restartedRecordedNode)
+        let restartedEndpoint = try await waitForRunningEndpoint(node: restartedNode)
+        XCTAssertEqual(restartedEndpoint.protocolType, .http)
+        let protocolHistory = await recorder.protocolHistory()
+        XCTAssertEqual(protocolHistory, [.https, .http])
+    }
+
+    func testLocalSendRuntimeAdapterSkipsRebuildWhenSettingsAreUnchanged() async throws {
+        let recorder = RuntimeComponentRecorder()
+        let settings = TransferProtocolSettings(
+            deviceName: "LocalDrop Test Mac",
+            tcpPort: 0,
+            requirePIN: false,
+            incomingPIN: "123456",
+            allowDownloads: true,
+            useHTTPS: true,
+            saveLocation: makeTempDirectory()
+        )
+        let adapter = try makeLiveRuntimeAdapter(settings: settings, recorder: recorder)
+        defer { Task { await adapter.stop() } }
+
+        try await adapter.updateSettings(settings)
+
+        let protocolHistory = await recorder.protocolHistory()
+        XCTAssertEqual(protocolHistory, [.https])
     }
 
     private func waitUntil(
@@ -380,32 +612,112 @@ final class FeatureTransferTests: XCTestCase {
         }
         return await runtime.lastUpdatedSettings
     }
+
+    private func makeLiveRuntimeAdapter(
+        settings: TransferProtocolSettings,
+        recorder: RuntimeComponentRecorder
+    ) throws -> LocalSendRuntimeAdapter {
+        let certificateStore = FileCertificateStore(
+            identityURL: makeTempDirectory().appendingPathComponent("identity.json")
+        )
+        let makeComponents: @Sendable (TransferProtocolSettings) throws -> LiveRuntimeComponents = { settings in
+            let identity = try CertificateAuthority(store: certificateStore).loadOrCreateIdentity()
+            let registerInfo = RegisterInfo(
+                alias: settings.deviceName,
+                deviceModel: "LocalDrop Test Runtime",
+                deviceType: .desktop,
+                fingerprint: identity.fingerprint,
+                port: settings.tcpPort == 0 ? nil : settings.tcpPort,
+                protocolType: settings.protocolType,
+                download: settings.allowDownloads
+            )
+            let runtimeConfiguration = LocalSendRuntimeConfiguration(
+                registerInfo: registerInfo,
+                protocolType: settings.protocolType,
+                tcpPort: UInt16(clamping: settings.tcpPort),
+                storageDirectory: settings.saveLocation,
+                pin: settings.requirePIN ? settings.incomingPIN : nil,
+                incomingRequestBridge: IncomingTransferRequestBridge(),
+                allowDownloads: settings.allowDownloads
+            )
+            let node = try LocalSendNode(
+                runtimeConfiguration: runtimeConfiguration,
+                certificateStore: certificateStore
+            )
+            let components = LiveRuntimeComponents(node: node, registerInfo: registerInfo)
+            Task {
+                await recorder.record(protocolType: settings.protocolType, node: node)
+            }
+            return components
+        }
+
+        return LocalSendRuntimeAdapter(
+            components: try makeComponents(settings),
+            settings: settings,
+            makeComponents: makeComponents
+        )
+    }
+
+    private func waitForRunningEndpoint(
+        node: LocalSendNode,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws -> LocalSendServerRuntimeBoundEndpoint {
+        for _ in 0..<100 {
+            let snapshot = await node.runtimeSnapshot()
+            switch snapshot.lifecycle {
+            case .running(let endpoint):
+                return endpoint
+            default:
+                await Task.yield()
+            }
+        }
+
+        XCTFail("Node did not reach running state", file: file, line: line)
+        throw TestFailure.nodeDidNotStart
+    }
+
+    private func makeTempDirectory() -> URL {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
 }
 
 private actor FakeTransferRuntime: TransferRuntime {
     private let peersBroadcaster = TestBroadcaster<[NearbyPeerItem]>(initialValue: [])
-    private let incomingBroadcaster = TestBroadcaster<IncomingTransferRequest>()
+    private let incomingBroadcaster = TestBroadcaster<FeatureTransfer.IncomingTransferRequest>()
     private let progressBroadcaster = TestBroadcaster<ActiveTransferProgress>()
     private(set) var lastUpdatedSettings: TransferProtocolSettings?
     private(set) var refreshDiscoveryCallCount = 0
     private(set) var stagedItems: [StagedTransferItem] = []
     private(set) var sentPeerIDs: [NearbyPeerItem.ID] = []
-    private(set) var responses: [IncomingTransferDecision] = []
+    private(set) var responses: [FeatureTransfer.IncomingTransferDecision] = []
     private(set) var canceledTransferIDs: [ActiveTransferProgress.ID] = []
+    private var updateSettingsError: Error?
 
     func start() async throws {}
     func stop() async {}
     func refreshDiscovery() async { refreshDiscoveryCallCount += 1 }
     func discoveredPeers() async -> AsyncStream<[NearbyPeerItem]> { await peersBroadcaster.stream() }
-    func inboundRequests() async -> AsyncStream<IncomingTransferRequest> { await incomingBroadcaster.stream() }
+    func inboundRequests() async -> AsyncStream<FeatureTransfer.IncomingTransferRequest> { await incomingBroadcaster.stream() }
     func progressEvents() async -> AsyncStream<ActiveTransferProgress> { await progressBroadcaster.stream() }
-    func updateSettings(_ settings: TransferProtocolSettings) async throws { lastUpdatedSettings = settings }
+    func updateSettings(_ settings: TransferProtocolSettings) async throws {
+        if let updateSettingsError {
+            throw updateSettingsError
+        }
+        lastUpdatedSettings = settings
+    }
     func stage(_ items: [StagedTransferItem]) async { stagedItems = items }
     func sendStagedItems(to peerID: NearbyPeerItem.ID, pin: String?) async throws { sentPeerIDs.append(peerID) }
-    func respondToIncomingRequest(_ response: IncomingTransferDecision) async throws { responses.append(response) }
+    func respondToIncomingRequest(_ response: FeatureTransfer.IncomingTransferDecision) async throws { responses.append(response) }
     func cancelActiveTransfer(_ id: ActiveTransferProgress.ID) async throws { canceledTransferIDs.append(id) }
 
-    func emitIncomingRequest(_ request: IncomingTransferRequest) async {
+    func setUpdateSettingsError(_ error: Error?) {
+        updateSettingsError = error
+    }
+
+    func emitIncomingRequest(_ request: FeatureTransfer.IncomingTransferRequest) async {
         await incomingBroadcaster.yield(request)
     }
 
@@ -426,6 +738,38 @@ private final class InMemorySettingsPersistence: TransferSettingsPersisting {
 
     func save(_ snapshot: TransferSettingsSnapshot) {
         savedSnapshots.append(snapshot)
+    }
+}
+
+private actor RuntimeComponentRecorder {
+    private var recordedProtocolHistory: [ProtocolType] = []
+    private var latestNode: LocalSendNode?
+
+    func record(protocolType: ProtocolType, node: LocalSendNode) {
+        recordedProtocolHistory.append(protocolType)
+        latestNode = node
+    }
+
+    func lastNode() -> LocalSendNode? {
+        latestNode
+    }
+
+    func protocolHistory() -> [ProtocolType] {
+        recordedProtocolHistory
+    }
+}
+
+private enum TestFailure: LocalizedError {
+    case nodeDidNotStart
+    case runtimeApplyFailed
+
+    var errorDescription: String? {
+        switch self {
+        case .nodeDidNotStart:
+            "Node did not start"
+        case .runtimeApplyFailed:
+            "Runtime apply failed"
+        }
     }
 }
 

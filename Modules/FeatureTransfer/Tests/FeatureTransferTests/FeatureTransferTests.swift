@@ -65,7 +65,131 @@ final class FeatureTransferTests: XCTestCase {
 
         let updated = await waitForRuntimeSettings(runtime)
         XCTAssertEqual(updated?.requirePIN, true)
+        XCTAssertEqual(updated?.incomingPIN, store.incomingPIN)
         XCTAssertEqual(updated?.allowDownloads, false)
+    }
+
+    func testDefaultSnapshotGeneratesValidIncomingPIN() {
+        let snapshot = TransferSettingsSnapshot.default(
+            deviceName: "LocalDrop Test Mac",
+            saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
+        )
+
+        XCTAssertEqual(snapshot.protocolSettings.incomingPIN.count, TransferProtocolSettings.incomingPINLength)
+        XCTAssertEqual(
+            TransferProtocolSettings.normalizedIncomingPIN(from: snapshot.protocolSettings.incomingPIN),
+            snapshot.protocolSettings.incomingPIN
+        )
+    }
+
+    func testSettingsPersistenceLoadsLegacySnapshotWithoutIncomingPIN() throws {
+        let suiteName = "FeatureTransferTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let payload = """
+        {
+          "quickSave":"on",
+          "appearance":"system",
+          "accentColor":"green",
+          "language":"system",
+          "minimizeToMenuBar":false,
+          "launchAtLogin":true,
+          "reduceMotion":false,
+          "autoAcceptFavorites":true,
+          "protocolSettings":{
+            "deviceName":"LocalDrop Test Mac",
+            "tcpPort":53317,
+            "requirePIN":true,
+            "allowDownloads":true,
+            "endToEndEncryption":true,
+            "saveLocation":"file:///tmp/LocalDropTests"
+          }
+        }
+        """
+        defaults.set(Data(payload.utf8), forKey: "FeatureTransfer.settings")
+
+        let adapter = SettingsPersistenceAdapter(
+            userDefaults: defaults,
+            fallback: .default(
+                deviceName: "Fallback Mac",
+                saveLocation: URL(fileURLWithPath: "/tmp/Fallback")
+            )
+        )
+        let loaded = adapter.load()
+
+        XCTAssertTrue(loaded.protocolSettings.requirePIN)
+        XCTAssertEqual(loaded.protocolSettings.incomingPIN.count, TransferProtocolSettings.incomingPINLength)
+        XCTAssertEqual(
+            TransferProtocolSettings.normalizedIncomingPIN(from: loaded.protocolSettings.incomingPIN),
+            loaded.protocolSettings.incomingPIN
+        )
+    }
+
+    func testEnsureIncomingPINGeneratesValidPINWhenMissing() {
+        let runtime = FakeTransferRuntime()
+        let store = TransferFeatureStore(
+            runtime: runtime,
+            settingsPersistence: InMemorySettingsPersistence(),
+            snapshot: .default(
+                deviceName: "LocalDrop Test Mac",
+                saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
+            )
+        )
+
+        store.incomingPIN = ""
+        store.ensureIncomingPIN()
+
+        XCTAssertEqual(store.incomingPIN.count, TransferProtocolSettings.incomingPINLength)
+        XCTAssertEqual(
+            TransferProtocolSettings.normalizedIncomingPIN(from: store.incomingPIN),
+            store.incomingPIN
+        )
+    }
+
+    func testUpdateIncomingPINPersistsAndPushesRuntimeSettings() async {
+        let runtime = FakeTransferRuntime()
+        let persistence = InMemorySettingsPersistence()
+        let store = TransferFeatureStore(
+            runtime: runtime,
+            settingsPersistence: persistence,
+            snapshot: .default(
+                deviceName: "LocalDrop Test Mac",
+                saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
+            )
+        )
+
+        store.requirePIN = true
+
+        XCTAssertTrue(store.updateIncomingPIN("12-34 56"))
+
+        XCTAssertEqual(store.incomingPIN, "123456")
+        XCTAssertEqual(persistence.savedSnapshots.last?.protocolSettings.incomingPIN, "123456")
+        XCTAssertEqual(persistence.savedSnapshots.last?.protocolSettings.requirePIN, true)
+
+        let updated = await waitForRuntimeSettings(runtime)
+        XCTAssertEqual(updated?.incomingPIN, "123456")
+        XCTAssertEqual(updated?.requirePIN, true)
+    }
+
+    func testUpdateIncomingPINRejectsInvalidValue() {
+        let runtime = FakeTransferRuntime()
+        let persistence = InMemorySettingsPersistence()
+        let store = TransferFeatureStore(
+            runtime: runtime,
+            settingsPersistence: persistence,
+            snapshot: .default(
+                deviceName: "LocalDrop Test Mac",
+                saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
+            )
+        )
+        let existingPIN = store.incomingPIN
+
+        XCTAssertFalse(store.updateIncomingPIN("123"))
+        XCTAssertEqual(store.incomingPIN, existingPIN)
+        XCTAssertTrue(persistence.savedSnapshots.isEmpty)
     }
 
     func testMenuSummaryReflectsRuntimeIncomingAndTransferStates() async {

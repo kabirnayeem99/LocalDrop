@@ -11,8 +11,14 @@ struct LocalDropApp: App {
     @State private var isFolderImporterPresented = false
 
     init() {
-        let isUITesting = ProcessInfo.processInfo.arguments.contains("--ui-testing")
-        _container = State(initialValue: isUITesting ? .testing() : .live())
+        let arguments = ProcessInfo.processInfo.arguments
+        let isUITesting = arguments.contains("--ui-testing")
+        let enableIncomingPINForUITests = arguments.contains("--ui-testing-incoming-pin-enabled")
+        _container = State(
+            initialValue: isUITesting
+                ? .testing(requirePIN: enableIncomingPINForUITests)
+                : .live()
+        )
     }
 
     var body: some Scene {

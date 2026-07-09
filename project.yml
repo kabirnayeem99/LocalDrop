@@ -30,6 +30,9 @@ targets:
     platform: macOS
     sources:
       - path: Tests/LocalDropAppTests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: true
     dependencies:
       - target: LocalDrop
   LocalDropAppUITests:
@@ -39,6 +42,7 @@ targets:
       - path: Tests/LocalDropAppUITests
     settings:
       base:
+        GENERATE_INFOPLIST_FILE: true
         PRODUCT_BUNDLE_IDENTIFIER: com.localdrop.LocalDropUITests
         TEST_TARGET_NAME: LocalDrop
     dependencies:

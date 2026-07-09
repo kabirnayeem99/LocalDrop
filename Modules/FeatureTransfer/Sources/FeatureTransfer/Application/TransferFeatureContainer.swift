@@ -92,7 +92,7 @@ public final class TransferFeatureContainer {
                     registerInfo: registerInfo,
                     tcpPort: UInt16(clamping: settings.tcpPort),
                     storageDirectory: settings.saveLocation,
-                    pin: settings.requirePIN ? "000000" : nil,
+                    pin: settings.requirePIN ? settings.incomingPIN : nil,
                     incomingRequestBridge: bridge,
                     allowDownloads: settings.allowDownloads
                 )
@@ -126,11 +126,16 @@ public final class TransferFeatureContainer {
         }
     }
 
-    public static func testing() -> TransferFeatureContainer {
-        let snapshot = TransferSettingsSnapshot.default(
+    public static func testing(
+        requirePIN: Bool = false,
+        incomingPIN: String = "123456"
+    ) -> TransferFeatureContainer {
+        var snapshot = TransferSettingsSnapshot.default(
             deviceName: "LocalDrop UI Test Mac",
             saveLocation: URL(fileURLWithPath: NSTemporaryDirectory())
         )
+        snapshot.protocolSettings.requirePIN = requirePIN
+        snapshot.protocolSettings.incomingPIN = incomingPIN
         let store = TransferFeatureStore(
             runtime: NoopTransferRuntime(),
             settingsPersistence: NoopSettingsPersistence(snapshot: snapshot),

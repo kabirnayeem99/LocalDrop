@@ -6,6 +6,9 @@ struct SettingsView: View {
     @Bindable var store: TransferFeatureStore
     @State private var saveLocationPulse = false
     @State private var securityDialog: SecurityDialog?
+    @State private var pinDraft = ""
+    @State private var showsIncomingPIN = false
+    @State private var pinValidationMessage: String?
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     @Environment(\.appReducesMotion) private var appReduceMotion
     private var reduceMotion: Bool { systemReduceMotion || appReduceMotion }
@@ -51,7 +54,40 @@ struct SettingsView: View {
                 }
 
                 Toggle("Require PIN for incoming", isOn: $store.requirePIN)
+                    .accessibilityIdentifier("settings-require-pin-toggle")
                     .help("Adds a PIN check before accepting incoming transfers.")
+                LabeledContent("Incoming PIN") {
+                    VStack(alignment: .trailing, spacing: Spacing.xxs) {
+                        HStack(spacing: Spacing.xs) {
+                            incomingPINField
+
+                            Button(showsIncomingPIN ? "Hide" : "Show") {
+                                showsIncomingPIN.toggle()
+                            }
+                            .disabled(store.requirePIN == false)
+                            .accessibilityIdentifier("settings-incoming-pin-visibility")
+
+                            Button("Apply") {
+                                applyIncomingPIN()
+                            }
+                            .disabled(canApplyIncomingPIN == false)
+                            .accessibilityIdentifier("settings-incoming-pin-apply")
+
+                            Button("Regenerate") {
+                                store.regenerateIncomingPIN()
+                                pinDraft = store.incomingPIN
+                                pinValidationMessage = nil
+                            }
+                            .disabled(store.requirePIN == false)
+                            .accessibilityIdentifier("settings-incoming-pin-regenerate")
+                        }
+
+                        Text(pinValidationMessage ?? "Use a 6-digit PIN for nearby senders.")
+                            .font(Typography.caption1)
+                            .foregroundStyle(pinValidationMessage == nil ? .secondary : SemanticColor.pending)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
                 Toggle("Auto-accept from favorites", isOn: $store.autoAcceptFavorites)
                     .help("Automatically accepts transfers only from trusted favorite devices.")
             }
@@ -71,6 +107,9 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .tint(AccentColor.primary)
+        .onAppear {
+            pinDraft = store.incomingPIN
+        }
         .alert(item: $securityDialog) { dialog in
             Alert(
                 title: Text("Security setting changed"),
@@ -85,10 +124,18 @@ struct SettingsView: View {
         .onChange(of: store.launchAtLogin) { _, _ in store.persistSettings() }
         .onChange(of: store.reduceMotion) { _, _ in store.persistSettings() }
         .onChange(of: store.requirePIN) { _, newValue in
+            if newValue {
+                store.ensureIncomingPIN()
+                pinDraft = store.incomingPIN
+            }
             store.persistSettings()
+            pinValidationMessage = nil
             if newValue {
                 securityDialog = .requirePIN
             }
+        }
+        .onChange(of: store.incomingPIN) { _, newValue in
+            pinDraft = newValue
         }
         .onChange(of: store.autoAcceptFavorites) { _, _ in store.persistSettings() }
         .onChange(of: store.allowDownloads) { _, newValue in
@@ -103,6 +150,36 @@ struct SettingsView: View {
                 securityDialog = .encryptionDisabled
             }
         }
+    }
+
+    @ViewBuilder private var incomingPINField: some View {
+        if showsIncomingPIN {
+            TextField("6 digits", text: $pinDraft)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 110)
+                .monospaced()
+                .disabled(store.requirePIN == false)
+                .accessibilityIdentifier("settings-incoming-pin-field")
+                .onSubmit { applyIncomingPIN() }
+        } else {
+            SecureField("6 digits", text: $pinDraft)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 110)
+                .monospaced()
+                .disabled(store.requirePIN == false)
+                .accessibilityIdentifier("settings-incoming-pin-field")
+                .onSubmit { applyIncomingPIN() }
+        }
+    }
+
+    private var canApplyIncomingPIN: Bool {
+        guard store.requirePIN else { return false }
+        guard let normalized = normalizedPinDraft else { return false }
+        return normalized != store.incomingPIN
+    }
+
+    private var normalizedPinDraft: String? {
+        TransferProtocolSettings.normalizedIncomingPIN(from: pinDraft)
     }
 
     private func chooseSaveLocation() {
@@ -122,6 +199,18 @@ struct SettingsView: View {
             await MainActor.run {
                 saveLocationPulse = false
             }
+        }
+    }
+
+    private func applyIncomingPIN() {
+        guard store.requirePIN else { return }
+        guard let normalized = normalizedPinDraft else {
+            pinValidationMessage = "PIN must be exactly \(TransferProtocolSettings.incomingPINLength) digits."
+            return
+        }
+        if store.updateIncomingPIN(normalized) {
+            pinDraft = store.incomingPIN
+            pinValidationMessage = nil
         }
     }
 }

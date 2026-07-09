@@ -17,6 +17,7 @@ final class TransferFeatureStore {
     var port: String
     var saveLocation: String
     var requirePIN: Bool
+    var incomingPIN: String
     var allowDownloads: Bool
     var endToEndEncryption: Bool
     var isRuntimeAvailable = false
@@ -60,6 +61,7 @@ final class TransferFeatureStore {
         self.port = String(snapshot.protocolSettings.tcpPort)
         self.saveLocation = snapshot.protocolSettings.saveLocation.path
         self.requirePIN = snapshot.protocolSettings.requirePIN
+        self.incomingPIN = snapshot.protocolSettings.incomingPIN
         self.allowDownloads = snapshot.protocolSettings.allowDownloads
         self.endToEndEncryption = snapshot.protocolSettings.endToEndEncryption
         self.historyEntries = historyEntries
@@ -91,6 +93,7 @@ final class TransferFeatureStore {
             deviceName: deviceName,
             tcpPort: Int(port) ?? 53317,
             requirePIN: requirePIN,
+            incomingPIN: resolvedIncomingPIN,
             allowDownloads: allowDownloads,
             endToEndEncryption: endToEndEncryption,
             saveLocation: URL(fileURLWithPath: saveLocation)
@@ -246,6 +249,9 @@ final class TransferFeatureStore {
     }
 
     func persistSettings() {
+        if requirePIN {
+            ensureIncomingPIN()
+        }
         settingsPersistence.save(makeSnapshot())
         showFeedback(
             TransferFeedback(message: "Settings saved", symbol: "checkmark.circle.fill", tone: .success)
@@ -268,6 +274,38 @@ final class TransferFeatureStore {
         showFeedback(
             TransferFeedback(message: "Save location changed", symbol: "folder.fill", tone: .success)
         )
+    }
+
+    func ensureIncomingPIN() {
+        incomingPIN = resolvedIncomingPIN
+    }
+
+    func regenerateIncomingPIN() {
+        incomingPIN = TransferProtocolSettings.generateIncomingPIN()
+        persistSettings()
+        showFeedback(
+            TransferFeedback(message: "Incoming PIN regenerated", symbol: "number.circle.fill", tone: .success)
+        )
+    }
+
+    func updateIncomingPIN(_ candidate: String) -> Bool {
+        guard let normalized = TransferProtocolSettings.normalizedIncomingPIN(from: candidate) else {
+            showFeedback(
+                TransferFeedback(
+                    message: "Incoming PIN must be exactly \(TransferProtocolSettings.incomingPINLength) digits",
+                    symbol: "exclamationmark.triangle.fill",
+                    tone: .destructive
+                )
+            )
+            return false
+        }
+
+        incomingPIN = normalized
+        persistSettings()
+        showFeedback(
+            TransferFeedback(message: "Incoming PIN updated", symbol: "number.circle.fill", tone: .success)
+        )
+        return true
     }
 
     private func bindRuntimeStreamsIfNeeded() {
@@ -350,6 +388,10 @@ final class TransferFeatureStore {
             autoAcceptFavorites: autoAcceptFavorites,
             protocolSettings: currentProtocolSettings
         )
+    }
+
+    private var resolvedIncomingPIN: String {
+        TransferProtocolSettings.normalizedIncomingPIN(from: incomingPIN) ?? TransferProtocolSettings.generateIncomingPIN()
     }
 
     private static func makeStagedItem(url: URL) -> StagedTransferItem {

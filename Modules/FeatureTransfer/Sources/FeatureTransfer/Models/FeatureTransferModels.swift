@@ -229,9 +229,75 @@ struct TransferProtocolSettings: Codable, Equatable, Sendable {
     var deviceName: String
     var tcpPort: Int
     var requirePIN: Bool
+    var incomingPIN: String
     var allowDownloads: Bool
     var endToEndEncryption: Bool
     var saveLocation: URL
+
+    enum CodingKeys: String, CodingKey {
+        case deviceName
+        case tcpPort
+        case requirePIN
+        case incomingPIN
+        case allowDownloads
+        case endToEndEncryption
+        case saveLocation
+    }
+
+    init(
+        deviceName: String,
+        tcpPort: Int,
+        requirePIN: Bool,
+        incomingPIN: String,
+        allowDownloads: Bool,
+        endToEndEncryption: Bool,
+        saveLocation: URL
+    ) {
+        self.deviceName = deviceName
+        self.tcpPort = tcpPort
+        self.requirePIN = requirePIN
+        self.incomingPIN = Self.normalizedIncomingPIN(from: incomingPIN) ?? Self.generateIncomingPIN()
+        self.allowDownloads = allowDownloads
+        self.endToEndEncryption = endToEndEncryption
+        self.saveLocation = saveLocation
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        deviceName = try container.decode(String.self, forKey: .deviceName)
+        tcpPort = try container.decode(Int.self, forKey: .tcpPort)
+        requirePIN = try container.decode(Bool.self, forKey: .requirePIN)
+        incomingPIN = Self.normalizedIncomingPIN(
+            from: try container.decodeIfPresent(String.self, forKey: .incomingPIN)
+        ) ?? Self.generateIncomingPIN()
+        allowDownloads = try container.decode(Bool.self, forKey: .allowDownloads)
+        endToEndEncryption = try container.decode(Bool.self, forKey: .endToEndEncryption)
+        saveLocation = try container.decode(URL.self, forKey: .saveLocation)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(deviceName, forKey: .deviceName)
+        try container.encode(tcpPort, forKey: .tcpPort)
+        try container.encode(requirePIN, forKey: .requirePIN)
+        try container.encode(Self.normalizedIncomingPIN(from: incomingPIN) ?? Self.generateIncomingPIN(), forKey: .incomingPIN)
+        try container.encode(allowDownloads, forKey: .allowDownloads)
+        try container.encode(endToEndEncryption, forKey: .endToEndEncryption)
+        try container.encode(saveLocation, forKey: .saveLocation)
+    }
+
+    static let incomingPINLength = 6
+
+    static func generateIncomingPIN() -> String {
+        String(format: "%0\(incomingPINLength)d", Int.random(in: 0..<1_000_000))
+    }
+
+    static func normalizedIncomingPIN(from candidate: String?) -> String? {
+        guard let candidate else { return nil }
+        let digits = candidate.unicodeScalars.filter { CharacterSet.decimalDigits.contains($0) }.map(String.init).joined()
+        guard digits.count == incomingPINLength else { return nil }
+        return digits
+    }
 }
 
 enum AccentColorChoice: String, CaseIterable, Codable, Identifiable, Sendable {
@@ -337,6 +403,7 @@ struct TransferSettingsSnapshot: Codable, Equatable, Sendable {
                 deviceName: deviceName,
                 tcpPort: 53317,
                 requirePIN: false,
+                incomingPIN: TransferProtocolSettings.generateIncomingPIN(),
                 allowDownloads: true,
                 endToEndEncryption: true,
                 saveLocation: saveLocation

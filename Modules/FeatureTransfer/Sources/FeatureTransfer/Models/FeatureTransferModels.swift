@@ -298,6 +298,10 @@ struct TransferProtocolSettings: Codable, Equatable, Sendable {
         guard digits.count == incomingPINLength else { return nil }
         return digits
     }
+
+    var protocolType: ProtocolType {
+        endToEndEncryption ? .https : .http
+    }
 }
 
 enum AccentColorChoice: String, CaseIterable, Codable, Identifiable, Sendable {

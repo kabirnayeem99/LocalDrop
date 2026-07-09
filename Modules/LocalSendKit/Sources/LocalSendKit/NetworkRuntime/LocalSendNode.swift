@@ -2,6 +2,7 @@ import Foundation
 
 public struct LocalSendRuntimeConfiguration: Sendable {
     public var registerInfo: RegisterInfo
+    public var protocolType: ProtocolType
     public var tcpPort: UInt16
     public var multicastPort: UInt16
     public var multicastHost: String
@@ -15,6 +16,7 @@ public struct LocalSendRuntimeConfiguration: Sendable {
 
     public init(
         registerInfo: RegisterInfo,
+        protocolType: ProtocolType = .https,
         tcpPort: UInt16 = 0,
         multicastPort: UInt16 = 53317,
         multicastHost: String = "224.0.0.167",
@@ -26,7 +28,10 @@ public struct LocalSendRuntimeConfiguration: Sendable {
         allowDownloads: Bool = true,
         limits: LocalSendRuntimeLimits = .init()
     ) {
+        var registerInfo = registerInfo
+        registerInfo.protocolType = protocolType
         self.registerInfo = registerInfo
+        self.protocolType = protocolType
         self.tcpPort = tcpPort
         self.multicastPort = multicastPort
         self.multicastHost = multicastHost
@@ -107,6 +112,7 @@ public final class LocalSendNode: @unchecked Sendable {
         self.serverRuntime = LocalSendServerRuntime(
             server: server,
             tlsConfiguration: LocalSendTLSConfiguration(identity: localIdentity),
+            protocolType: runtimeConfiguration.protocolType,
             port: runtimeConfiguration.tcpPort,
             limits: runtimeConfiguration.limits,
             temporaryDirectory: runtimeConfiguration.storageDirectory

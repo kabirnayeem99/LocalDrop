@@ -20,7 +20,8 @@ private func makeIdentity() throws -> LocalIdentity {
 private func makeServer(
     fingerprint: String,
     sharedFiles: [String: LocalSharedFile] = [:],
-    storageDirectory: URL
+    storageDirectory: URL,
+    protocolType: ProtocolType = .https
 ) -> LocalSendServer {
     LocalSendServer(
         configuration: LocalSendServerConfiguration(
@@ -30,7 +31,7 @@ private func makeServer(
                 deviceType: .desktop,
                 fingerprint: fingerprint,
                 port: nil,
-                protocolType: .https,
+                protocolType: protocolType,
                 download: true
             ),
             sharedFiles: sharedFiles,
@@ -68,7 +69,7 @@ private final class RawTLSConnection: @unchecked Sendable {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             var didResume = false
             let lock = NSLock()
-            func resumeOnce(_ result: Result<Void, Error>) {
+            @Sendable func resumeOnce(_ result: Result<Void, Error>) {
                 lock.lock()
                 defer { lock.unlock() }
                 guard didResume == false else { return }
@@ -98,7 +99,7 @@ private final class RawTLSConnection: @unchecked Sendable {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             var didResume = false
             let lock = NSLock()
-            func resumeOnce(_ result: Result<Void, Error>) {
+            @Sendable func resumeOnce(_ result: Result<Void, Error>) {
                 lock.lock()
                 defer { lock.unlock() }
                 guard didResume == false else { return }
@@ -125,7 +126,7 @@ private final class RawTLSConnection: @unchecked Sendable {
             var didResume = false
             let lock = NSLock()
             var buffer = Data()
-            func resumeOnce(_ data: Data) {
+            @Sendable func resumeOnce(_ data: Data) {
                 lock.lock()
                 defer { lock.unlock() }
                 guard didResume == false else { return }
@@ -195,7 +196,8 @@ struct LocalSendNodeTests {
         alias: String = "NodeUnderTest",
         port: UInt16 = 0,
         multicastPort: UInt16 = 53317,
-        allowDownloads: Bool = true
+        allowDownloads: Bool = true,
+        protocolType: ProtocolType = .https
     ) throws -> (LocalSendNode, RegisterInfo) {
         let identity = try makeIdentity()
         let registerInfo = RegisterInfo(
@@ -204,7 +206,7 @@ struct LocalSendNodeTests {
             deviceType: .desktop,
             fingerprint: identity.fingerprint,
             port: nil,
-            protocolType: .https,
+            protocolType: protocolType,
             download: allowDownloads
         )
         let storeURL = makeTempDirectory().appendingPathComponent("node-identity.json")
@@ -212,6 +214,7 @@ struct LocalSendNodeTests {
 
         let configuration = LocalSendRuntimeConfiguration(
             registerInfo: registerInfo,
+            protocolType: protocolType,
             tcpPort: port,
             multicastPort: multicastPort,
             multicastHost: "224.0.0.167",
@@ -340,6 +343,38 @@ struct LocalSendNodeTests {
         let client = factory.makeClient(host: "127.0.0.1", port: 1234, protocolType: .https, fingerprint: "FPR")
         #expect(type(of: client) == LocalSendClient.self)
     }
+
+    @Test func httpNodeServesInfoAndReportsHTTPProtocol() async throws {
+        let (node, registerInfo) = try makeNode(protocolType: .http)
+        try await node.start()
+        defer { Task { await node.stop() } }
+
+        let runtime = await withTimeout(seconds: 5) {
+            var iterator = await node.observeRuntime().makeAsyncIterator()
+            return await iterator.next()
+        }
+        let snapshot = try #require(runtime ?? nil)
+        let endpoint: LocalSendServerRuntimeBoundEndpoint
+        switch snapshot.lifecycle {
+        case .running(let boundEndpoint):
+            endpoint = boundEndpoint
+        default:
+            Issue.record("expected node runtime to reach running state")
+            return
+        }
+
+        let client = node.makeClient(
+            host: endpoint.host,
+            port: endpoint.port,
+            protocolType: endpoint.protocolType,
+            fingerprint: registerInfo.fingerprint
+        )
+        let info = try await client.info()
+
+        #expect(endpoint.protocolType == .http)
+        #expect(info.alias == registerInfo.alias)
+        #expect(info.fingerprint == registerInfo.fingerprint)
+    }
 }
 
 // MARK: - LocalSendServerRuntime
@@ -349,14 +384,21 @@ struct LocalSendServerRuntimeTests {
         fingerprint: String = "ABC",
         sharedFiles: [String: LocalSharedFile] = [:],
         limits: LocalSendRuntimeLimits = .init(),
-        port: UInt16 = 0
+        port: UInt16 = 0,
+        protocolType: ProtocolType = .https
     ) throws -> (LocalSendServerRuntime, LocalIdentity, LocalSendServer) {
         let identity = try makeIdentity()
         let storageDirectory = makeTempDirectory()
-        let server = makeServer(fingerprint: identity.fingerprint, sharedFiles: sharedFiles, storageDirectory: storageDirectory)
+        let server = makeServer(
+            fingerprint: identity.fingerprint,
+            sharedFiles: sharedFiles,
+            storageDirectory: storageDirectory,
+            protocolType: protocolType
+        )
         let runtime = LocalSendServerRuntime(
             server: server,
             tlsConfiguration: LocalSendTLSConfiguration(identity: identity),
+            protocolType: protocolType,
             port: port,
             limits: limits,
             temporaryDirectory: storageDirectory
@@ -397,6 +439,23 @@ struct LocalSendServerRuntimeTests {
         let endpoint = try await runtime.waitUntilReady()
         #expect(endpoint.port == Int(requestedPort))
         await runtime.stop()
+    }
+
+    @Test func httpRuntimeReportsHTTPBoundEndpoint() async throws {
+        let (runtime, identity, _) = try makeRuntime(protocolType: .http)
+        try await runtime.start()
+        let endpoint = try await runtime.waitUntilReady()
+        defer { Task { await runtime.stop() } }
+
+        let client = LocalSendClient(
+            peer: RemotePeer(host: endpoint.host, port: endpoint.port, protocolType: endpoint.protocolType),
+            expectedFingerprint: identity.fingerprint
+        )
+        let info = try await client.info()
+
+        #expect(endpoint.protocolType == .http)
+        #expect(info.alias == "Receiver")
+        #expect(info.fingerprint == identity.fingerprint)
     }
 
     @Test func listenerFailsWhenPortAlreadyBound() async throws {

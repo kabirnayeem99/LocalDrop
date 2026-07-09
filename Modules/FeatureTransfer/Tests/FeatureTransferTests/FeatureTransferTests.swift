@@ -57,16 +57,37 @@ final class FeatureTransferTests: XCTestCase {
 
         store.requirePIN = true
         store.allowDownloads = false
+        store.endToEndEncryption = false
         store.persistSettings()
 
         let persisted = persistence.savedSnapshots.last
         XCTAssertEqual(persisted?.protocolSettings.requirePIN, true)
         XCTAssertEqual(persisted?.protocolSettings.allowDownloads, false)
+        XCTAssertEqual(persisted?.protocolSettings.endToEndEncryption, false)
 
         let updated = await waitForRuntimeSettings(runtime)
         XCTAssertEqual(updated?.requirePIN, true)
         XCTAssertEqual(updated?.incomingPIN, store.incomingPIN)
         XCTAssertEqual(updated?.allowDownloads, false)
+        XCTAssertEqual(updated?.protocolType, .http)
+    }
+
+    func testProtocolSettingsMapEncryptionToggleToProtocolType() {
+        var settings = TransferProtocolSettings(
+            deviceName: "LocalDrop Test Mac",
+            tcpPort: 53_317,
+            requirePIN: false,
+            incomingPIN: "123456",
+            allowDownloads: true,
+            endToEndEncryption: true,
+            saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
+        )
+
+        XCTAssertEqual(settings.protocolType, .https)
+
+        settings.endToEndEncryption = false
+
+        XCTAssertEqual(settings.protocolType, .http)
     }
 
     func testDefaultSnapshotGeneratesValidIncomingPIN() {

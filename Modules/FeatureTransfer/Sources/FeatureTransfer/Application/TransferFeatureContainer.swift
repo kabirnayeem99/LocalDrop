@@ -85,11 +85,12 @@ public final class TransferFeatureContainer {
                     deviceType: .desktop,
                     fingerprint: identity.fingerprint,
                     port: settings.tcpPort,
-                    protocolType: .https,
+                    protocolType: settings.protocolType,
                     download: settings.allowDownloads
                 )
                 let runtimeConfiguration = LocalSendRuntimeConfiguration(
                     registerInfo: registerInfo,
+                    protocolType: settings.protocolType,
                     tcpPort: UInt16(clamping: settings.tcpPort),
                     storageDirectory: settings.saveLocation,
                     pin: settings.requirePIN ? settings.incomingPIN : nil,

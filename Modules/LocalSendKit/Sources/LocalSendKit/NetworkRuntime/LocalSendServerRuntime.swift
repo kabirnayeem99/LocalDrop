@@ -26,6 +26,7 @@ public final actor LocalSendServerRuntime {
 
     private let server: LocalSendServer
     private let tlsConfiguration: LocalSendTLSConfiguration
+    private let protocolType: ProtocolType
     private let port: UInt16
     private let limits: LocalSendRuntimeLimits
     private let temporaryDirectory: URL
@@ -37,12 +38,14 @@ public final actor LocalSendServerRuntime {
     public init(
         server: LocalSendServer,
         tlsConfiguration: LocalSendTLSConfiguration,
+        protocolType: ProtocolType = .https,
         port: UInt16,
         limits: LocalSendRuntimeLimits = .init(),
         temporaryDirectory: URL
     ) {
         self.server = server
         self.tlsConfiguration = tlsConfiguration
+        self.protocolType = protocolType
         self.port = port
         self.limits = limits
         self.temporaryDirectory = temporaryDirectory
@@ -51,10 +54,11 @@ public final actor LocalSendServerRuntime {
     public func start() async throws {
         guard listener == nil else { return }
         let listener: NWListener
+        let parameters = try makeListenerParameters()
         if let requestedPort = NWEndpoint.Port(rawValue: port), port != 0 {
-            listener = try NWListener(using: tlsConfiguration.makeListenerParameters(), on: requestedPort)
+            listener = try NWListener(using: parameters, on: requestedPort)
         } else {
-            listener = try NWListener(using: tlsConfiguration.makeListenerParameters())
+            listener = try NWListener(using: parameters)
         }
         self.listener = listener
 
@@ -318,9 +322,21 @@ public final actor LocalSendServerRuntime {
 
     private func resolvedEndpoint(from listener: NWListener) -> BoundEndpoint {
         guard let port = listener.port else {
-            return BoundEndpoint(host: "127.0.0.1", port: Int(self.port), protocolType: .https)
+            return BoundEndpoint(host: "127.0.0.1", port: Int(self.port), protocolType: protocolType)
         }
-        return BoundEndpoint(host: "127.0.0.1", port: Int(port.rawValue), protocolType: .https)
+        return BoundEndpoint(host: "127.0.0.1", port: Int(port.rawValue), protocolType: protocolType)
+    }
+
+    private func makeListenerParameters() throws -> NWParameters {
+        switch protocolType {
+        case .https:
+            return try tlsConfiguration.makeListenerParameters()
+        case .http:
+            let parameters = NWParameters.tcp
+            parameters.allowLocalEndpointReuse = true
+            parameters.includePeerToPeer = true
+            return parameters
+        }
     }
 
     private static func remoteAddress(from endpoint: NWEndpoint) -> String {

@@ -3,11 +3,15 @@ import Testing
 @testable import LocalSendKit
 
 struct IntegrationTests {
-    private func makePeer() -> RemotePeer {
-        RemotePeer(host: "127.0.0.1", port: 53317, protocolType: .https)
+    private func makePeer(protocolType: ProtocolType = .https) -> RemotePeer {
+        RemotePeer(host: "127.0.0.1", port: 53317, protocolType: protocolType)
     }
 
-    private func makeServer(sharedFiles: [String: LocalSharedFile] = [:], pin: String? = nil) -> LocalSendServer {
+    private func makeServer(
+        sharedFiles: [String: LocalSharedFile] = [:],
+        pin: String? = nil,
+        protocolType: ProtocolType = .https
+    ) -> LocalSendServer {
         let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
         return LocalSendServer(
             configuration: LocalSendServerConfiguration(
@@ -17,7 +21,7 @@ struct IntegrationTests {
                     deviceType: .desktop,
                     fingerprint: "ABC",
                     port: 53317,
-                    protocolType: .https,
+                    protocolType: protocolType,
                     download: true
                 ),
                 pin: pin,
@@ -27,6 +31,71 @@ struct IntegrationTests {
                 storageDirectory: directory
             )
         )
+    }
+
+    @Test func realHTTPRuntimeServesInfoOverLoopback() async throws {
+        let identity = try makeIdentity()
+        let server = LocalSendServer(
+            configuration: LocalSendServerConfiguration(
+                registerInfo: RegisterInfo(
+                    alias: "Receiver",
+                    deviceModel: "Mac",
+                    deviceType: .desktop,
+                    fingerprint: identity.fingerprint,
+                    port: nil,
+                    protocolType: .http,
+                    download: true
+                ),
+                storageDirectory: URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+            )
+        )
+        let runtime = LocalSendServerRuntime(
+            server: server,
+            tlsConfiguration: LocalSendTLSConfiguration(identity: identity),
+            protocolType: .http,
+            port: 0,
+            temporaryDirectory: URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        )
+        try await runtime.start()
+        let endpoint = try await runtime.waitUntilReady()
+        defer { Task { await runtime.stop() } }
+
+        let client = LocalSendClient(
+            peer: RemotePeer(host: endpoint.host, port: endpoint.port, protocolType: endpoint.protocolType),
+            expectedFingerprint: identity.fingerprint
+        )
+        let info = try await client.info()
+        #expect(endpoint.protocolType == .http)
+        #expect(info.alias == "Receiver")
+        #expect(info.fingerprint == identity.fingerprint)
+    }
+
+    @Test func mismatchedProtocolBetweenClientAndServerFails() async throws {
+        let identity = try makeIdentity()
+        let server = LocalSendServer(
+            configuration: LocalSendServerConfiguration(
+                registerInfo: RegisterInfo(alias: "Receiver", fingerprint: identity.fingerprint, port: nil, protocolType: .http),
+                storageDirectory: URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+            )
+        )
+        let runtime = LocalSendServerRuntime(
+            server: server,
+            tlsConfiguration: LocalSendTLSConfiguration(identity: identity),
+            protocolType: .http,
+            port: 0,
+            temporaryDirectory: URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        )
+        try await runtime.start()
+        let endpoint = try await runtime.waitUntilReady()
+        defer { Task { await runtime.stop() } }
+
+        let client = LocalSendClient(
+            peer: RemotePeer(host: endpoint.host, port: endpoint.port, protocolType: .https),
+            expectedFingerprint: identity.fingerprint
+        )
+        await #expect(throws: Error.self) {
+            _ = try await client.info()
+        }
     }
 
     private func makeIdentity() throws -> LocalIdentity {

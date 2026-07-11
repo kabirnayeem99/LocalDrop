@@ -93,4 +93,27 @@ enum LanguageSetting: String, CaseIterable, Identifiable, Codable, Sendable {
         case .german: "Deutsch"
         }
     }
+
+    // Drives only system-provided formatters (dates, byte counts) and SwiftUI chrome;
+    // app-authored string translation is a separate future effort (no catalog exists yet).
+    var locale: Locale? {
+        switch self {
+        case .system: nil
+        case .english: Locale(identifier: "en")
+        case .german: Locale(identifier: "de")
+        }
+    }
+}
+
+extension View {
+    // `.system` must leave the environment untouched rather than force an
+    // explicit `Locale` value, so it behaves identically to today's no-override default.
+    @ViewBuilder
+    func applyingLanguageOverride(_ language: LanguageSetting) -> some View {
+        if let locale = language.locale {
+            self.environment(\.locale, locale)
+        } else {
+            self
+        }
+    }
 }

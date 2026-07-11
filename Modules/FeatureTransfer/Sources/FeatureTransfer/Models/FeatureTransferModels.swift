@@ -1,5 +1,8 @@
+import AppKit
+import DesignSystem
 import Foundation
 import LocalSendKit
+import SwiftUI
 
 enum DeviceKind: Sendable {
     case macbook
@@ -188,14 +191,38 @@ struct ActiveTransferProgress: Identifiable, Equatable, Sendable {
     let progress: Double
     let throughput: String
     let etaDescription: String
+    let byteCount: Int64?
+    let fileURL: URL?
+
+    init(
+        id: ID,
+        direction: Direction,
+        counterpartName: String,
+        fileName: String,
+        progress: Double,
+        throughput: String,
+        etaDescription: String,
+        byteCount: Int64? = nil,
+        fileURL: URL? = nil
+    ) {
+        self.id = id
+        self.direction = direction
+        self.counterpartName = counterpartName
+        self.fileName = fileName
+        self.progress = progress
+        self.throughput = throughput
+        self.etaDescription = etaDescription
+        self.byteCount = byteCount
+        self.fileURL = fileURL
+    }
 }
 
-enum TransferDirection: Equatable, Sendable {
+enum TransferDirection: String, Equatable, Codable, Sendable {
     case sent
     case received
 }
 
-enum TransferOutcome: Equatable, Sendable {
+enum TransferOutcome: String, Equatable, Codable, Sendable {
     case completed
     case declined
 
@@ -214,23 +241,25 @@ enum TransferOutcome: Equatable, Sendable {
     }
 }
 
-struct HistoryEntry: Identifiable, Sendable {
+struct HistoryEntry: Identifiable, Codable, Sendable {
     let id: UUID
     let fileName: String
     let counterpart: String
     let size: String
-    let timestamp: String
+    let timestamp: Date
     let direction: TransferDirection
     let outcome: TransferOutcome
+    let fileURL: URL?
 
     init(
         id: UUID = UUID(),
         fileName: String,
         counterpart: String,
         size: String,
-        timestamp: String,
+        timestamp: Date,
         direction: TransferDirection,
-        outcome: TransferOutcome
+        outcome: TransferOutcome,
+        fileURL: URL? = nil
     ) {
         self.id = id
         self.fileName = fileName
@@ -239,11 +268,40 @@ struct HistoryEntry: Identifiable, Sendable {
         self.timestamp = timestamp
         self.direction = direction
         self.outcome = outcome
+        self.fileURL = fileURL
     }
 
     var subtitle: String {
         let verb = direction == .received ? "Received from" : "Sent to"
         return "\(verb) \(counterpart) · \(size)"
+    }
+
+    /// Human-readable rendering of `timestamp` for row display, e.g.
+    /// "Today, 2:14 PM", "Yesterday", "Mon", or "Jul 4, 2026".
+    var timestampDisplay: String {
+        Self.displayString(for: timestamp)
+    }
+
+    static func displayString(
+        for date: Date,
+        calendar: Calendar = .current,
+        now: Date = Date()
+    ) -> String {
+        if calendar.isDateInToday(date) {
+            return "Today, \(date.formatted(date: .omitted, time: .shortened))"
+        }
+        if calendar.isDateInYesterday(date) {
+            return "Yesterday"
+        }
+        let days = calendar.dateComponents(
+            [.day],
+            from: calendar.startOfDay(for: date),
+            to: calendar.startOfDay(for: now)
+        ).day
+        if let days, days >= 0, days < 7 {
+            return date.formatted(.dateTime.weekday(.abbreviated))
+        }
+        return date.formatted(date: .abbreviated, time: .omitted)
     }
 }
 
@@ -350,6 +408,19 @@ enum AccentColorChoice: String, CaseIterable, Codable, Identifiable, Sendable {
         case .purple: "Purple"
         }
     }
+
+    var resolvedColor: Color {
+        switch self {
+        case .green:
+            return AccentColor.primary
+        case .blue:
+            return Color(nsColor: .systemBlue)
+        case .orange:
+            return Color(nsColor: .systemOrange)
+        case .purple:
+            return Color(nsColor: .systemPurple)
+        }
+    }
 }
 
 struct TransferSettingsSnapshot: Codable, Equatable, Sendable {
@@ -447,38 +518,41 @@ struct TransferSettingsSnapshot: Codable, Equatable, Sendable {
 }
 
 extension HistoryEntry {
-    static let samples: [HistoryEntry] = [
-        HistoryEntry(
-            fileName: "Design-Assets.zip",
-            counterpart: "iPhone 15 Pro",
-            size: "24.6 MB",
-            timestamp: "Today, 2:14 PM",
-            direction: .received,
-            outcome: .completed
-        ),
-        HistoryEntry(
-            fileName: "Q3-Report.pdf",
-            counterpart: "iMac Studio",
-            size: "4.2 MB",
-            timestamp: "Today, 11:02 AM",
-            direction: .sent,
-            outcome: .completed
-        ),
-        HistoryEntry(
-            fileName: "IMG_4021.HEIC",
-            counterpart: "iPad Air",
-            size: "3.1 MB",
-            timestamp: "Yesterday",
-            direction: .received,
-            outcome: .completed
-        ),
-        HistoryEntry(
-            fileName: "presentation.key",
-            counterpart: "Galaxy S24",
-            size: "18.9 MB",
-            timestamp: "Mon",
-            direction: .sent,
-            outcome: .declined
-        )
-    ]
+    static let samples: [HistoryEntry] = {
+        let now = Date()
+        return [
+            HistoryEntry(
+                fileName: "Design-Assets.zip",
+                counterpart: "iPhone 15 Pro",
+                size: "24.6 MB",
+                timestamp: now,
+                direction: .received,
+                outcome: .completed
+            ),
+            HistoryEntry(
+                fileName: "Q3-Report.pdf",
+                counterpart: "iMac Studio",
+                size: "4.2 MB",
+                timestamp: now.addingTimeInterval(-3 * 3600),
+                direction: .sent,
+                outcome: .completed
+            ),
+            HistoryEntry(
+                fileName: "IMG_4021.HEIC",
+                counterpart: "iPad Air",
+                size: "3.1 MB",
+                timestamp: now.addingTimeInterval(-24 * 3600),
+                direction: .received,
+                outcome: .completed
+            ),
+            HistoryEntry(
+                fileName: "presentation.key",
+                counterpart: "Galaxy S24",
+                size: "18.9 MB",
+                timestamp: now.addingTimeInterval(-4 * 24 * 3600),
+                direction: .sent,
+                outcome: .declined
+            )
+        ]
+    }()
 }

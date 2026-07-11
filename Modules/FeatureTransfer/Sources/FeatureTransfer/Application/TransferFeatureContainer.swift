@@ -28,6 +28,12 @@ public final class TransferFeatureContainer {
 
     public func menuBarExtraView(actions: TransferMenuActions) -> some View {
         TransferMenuBarExtraView(store: store, actions: actions)
+            .applyingLanguageOverride(store.language)
+            .tint(store.accentColor.resolvedColor)
+    }
+
+    public var shouldMinimizeToMenuBar: Bool {
+        store.minimizeToMenuBar
     }
 
     public func startIfNeeded() async {
@@ -188,7 +194,19 @@ public final class TransferFeatureContainer {
             userDefaults: userDefaults,
             fallback: defaultSnapshot
         )
-        let snapshot = settingsPersistence.load()
+        var snapshot = settingsPersistence.load()
+        let historyPersistence = HistoryPersistenceAdapter(
+            directory: baseDirectory,
+            fileManager: fileManager
+        )
+        let loginItemManaging = SMAppServiceLoginItemManager()
+        // The user may have added/removed the login item directly via System Settings,
+        // so trust the actual registration state over the persisted bool.
+        let actuallyLaunchesAtLogin = loginItemManaging.isRegistered
+        if snapshot.launchAtLogin != actuallyLaunchesAtLogin {
+            snapshot.launchAtLogin = actuallyLaunchesAtLogin
+            settingsPersistence.save(snapshot)
+        }
 
         logger.emit(
             level: .info,
@@ -242,6 +260,8 @@ public final class TransferFeatureContainer {
             let store = TransferFeatureStore(
                 runtime: runtime,
                 settingsPersistence: settingsPersistence,
+                historyPersistence: historyPersistence,
+                loginItemManaging: loginItemManaging,
                 snapshot: snapshot,
                 logger: logger
             )
@@ -261,6 +281,8 @@ public final class TransferFeatureContainer {
             let store = TransferFeatureStore(
                 runtime: runtime,
                 settingsPersistence: settingsPersistence,
+                historyPersistence: historyPersistence,
+                loginItemManaging: loginItemManaging,
                 snapshot: snapshot,
                 logger: logger
             )
@@ -283,6 +305,8 @@ public final class TransferFeatureContainer {
         let store = TransferFeatureStore(
             runtime: NoopTransferRuntime(),
             settingsPersistence: NoopSettingsPersistence(snapshot: snapshot),
+            historyPersistence: InMemoryHistoryPersistence(),
+            loginItemManaging: NoopLoginItemManager(),
             snapshot: snapshot,
             logger: .disabled()
         )
@@ -408,4 +432,26 @@ private final class NoopSettingsPersistence: TransferSettingsPersisting {
     }
 
     func save(_ snapshot: TransferSettingsSnapshot) {}
+}
+
+final class InMemoryHistoryPersistence: HistoryPersisting {
+    private var entries: [HistoryEntry]
+
+    init(entries: [HistoryEntry] = HistoryEntry.samples) {
+        self.entries = entries
+    }
+
+    func load() -> [HistoryEntry] {
+        entries
+    }
+
+    func save(_ entries: [HistoryEntry]) {
+        self.entries = entries
+    }
+}
+
+private struct NoopLoginItemManager: LoginItemManaging {
+    func register() throws {}
+    func unregister() throws {}
+    var isRegistered: Bool { false }
 }

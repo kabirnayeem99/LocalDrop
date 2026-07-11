@@ -19,6 +19,8 @@ struct RootView: View {
                 .navigationTitle(store.screen.title)
         }
         .environment(\.appReducesMotion, store.reduceMotion)
+        .applyingLanguageOverride(store.language)
+        .tint(store.accentColor.resolvedColor)
         .preferredColorScheme(store.appearance.colorScheme)
         .overlay(alignment: .top) {
             if let feedback = store.feedback {

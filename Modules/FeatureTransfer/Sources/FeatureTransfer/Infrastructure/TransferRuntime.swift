@@ -18,3 +18,8 @@ protocol TransferSettingsPersisting {
     func load() -> TransferSettingsSnapshot
     func save(_ snapshot: TransferSettingsSnapshot)
 }
+
+protocol HistoryPersisting {
+    func load() -> [HistoryEntry]
+    func save(_ entries: [HistoryEntry])
+}

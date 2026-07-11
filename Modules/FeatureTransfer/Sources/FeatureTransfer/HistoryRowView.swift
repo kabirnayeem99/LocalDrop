@@ -3,6 +3,9 @@ import DesignSystem
 
 struct HistoryRowView: View {
     let entry: HistoryEntry
+    let store: TransferFeatureStore
+
+    private var hasFile: Bool { entry.fileURL != nil }
 
     var body: some View {
         HStack(spacing: Spacing.sm) {
@@ -28,7 +31,7 @@ struct HistoryRowView: View {
             Spacer(minLength: Spacing.sm)
 
             VStack(alignment: .trailing, spacing: Spacing.xxs) {
-                Text(entry.timestamp)
+                Text(entry.timestampDisplay)
                     .font(Typography.subheadline)
                     .foregroundStyle(.secondary)
                 Label(entry.outcome.label, systemImage: entry.outcome.symbol)
@@ -36,8 +39,34 @@ struct HistoryRowView: View {
                     .foregroundStyle(outcomeTint)
                     .labelStyle(.titleAndIcon)
             }
+
+            fileActionsMenu
         }
         .padding(.vertical, Spacing.xxs)
+    }
+
+    private var fileActionsMenu: some View {
+        Menu {
+            Button {
+                store.revealInFinder(entry)
+            } label: {
+                Label("Reveal in Finder", systemImage: "folder")
+            }
+            Button {
+                store.openHistoryItem(entry)
+            } label: {
+                Label("Open", systemImage: "arrow.up.forward.app")
+            }
+        } label: {
+            Image(systemName: "ellipsis.circle")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(.secondary)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .frame(width: 24)
+        .disabled(hasFile == false)
+        .help(hasFile ? "Reveal or open this file" : "File location unavailable")
     }
 
     private var directionSymbol: String {

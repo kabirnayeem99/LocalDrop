@@ -11,6 +11,8 @@ final class FeatureTransferTests: XCTestCase {
         let store = TransferFeatureStore(
             runtime: runtime,
             settingsPersistence: InMemorySettingsPersistence(),
+            historyPersistence: InMemoryHistoryPersistence(),
+            loginItemManaging: FakeLoginItemManaging(),
             snapshot: .default(
                 deviceName: "LocalDrop Test Mac",
                 saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
@@ -52,6 +54,8 @@ final class FeatureTransferTests: XCTestCase {
         let store = TransferFeatureStore(
             runtime: runtime,
             settingsPersistence: persistence,
+            historyPersistence: InMemoryHistoryPersistence(),
+            loginItemManaging: FakeLoginItemManaging(),
             snapshot: .default(
                 deviceName: "LocalDrop Test Mac",
                 saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
@@ -205,6 +209,8 @@ final class FeatureTransferTests: XCTestCase {
         let store = TransferFeatureStore(
             runtime: runtime,
             settingsPersistence: InMemorySettingsPersistence(),
+            historyPersistence: InMemoryHistoryPersistence(),
+            loginItemManaging: FakeLoginItemManaging(),
             snapshot: .default(
                 deviceName: "LocalDrop Test Mac",
                 saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
@@ -227,6 +233,8 @@ final class FeatureTransferTests: XCTestCase {
         let store = TransferFeatureStore(
             runtime: runtime,
             settingsPersistence: persistence,
+            historyPersistence: InMemoryHistoryPersistence(),
+            loginItemManaging: FakeLoginItemManaging(),
             snapshot: .default(
                 deviceName: "LocalDrop Test Mac",
                 saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
@@ -247,6 +255,8 @@ final class FeatureTransferTests: XCTestCase {
         let store = TransferFeatureStore(
             runtime: runtime,
             settingsPersistence: persistence,
+            historyPersistence: InMemoryHistoryPersistence(),
+            loginItemManaging: FakeLoginItemManaging(),
             snapshot: .default(
                 deviceName: "LocalDrop Test Mac",
                 saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
@@ -272,6 +282,8 @@ final class FeatureTransferTests: XCTestCase {
         let store = TransferFeatureStore(
             runtime: runtime,
             settingsPersistence: persistence,
+            historyPersistence: InMemoryHistoryPersistence(),
+            loginItemManaging: FakeLoginItemManaging(),
             snapshot: .default(
                 deviceName: "LocalDrop Test Mac",
                 saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
@@ -290,6 +302,8 @@ final class FeatureTransferTests: XCTestCase {
         let store = TransferFeatureStore(
             runtime: runtime,
             settingsPersistence: InMemorySettingsPersistence(),
+            historyPersistence: InMemoryHistoryPersistence(),
+            loginItemManaging: FakeLoginItemManaging(),
             snapshot: .default(
                 deviceName: "LocalDrop Test Mac",
                 saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
@@ -306,21 +320,23 @@ final class FeatureTransferTests: XCTestCase {
 
     func testMenuSummaryReflectsRuntimeIncomingAndTransferStates() async {
         let runtime = FakeTransferRuntime()
+        let historyPersistence = InMemoryHistoryPersistence(entries: [
+            makeHistoryEntry(fileName: "one.txt"),
+            makeHistoryEntry(fileName: "two.txt"),
+            makeHistoryEntry(fileName: "three.txt"),
+            makeHistoryEntry(fileName: "four.txt"),
+            makeHistoryEntry(fileName: "five.txt"),
+            makeHistoryEntry(fileName: "six.txt")
+        ])
         let store = TransferFeatureStore(
             runtime: runtime,
             settingsPersistence: InMemorySettingsPersistence(),
+            historyPersistence: historyPersistence,
+            loginItemManaging: FakeLoginItemManaging(),
             snapshot: .default(
                 deviceName: "LocalDrop Test Mac",
                 saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
-            ),
-            historyEntries: [
-                makeHistoryEntry(fileName: "one.txt"),
-                makeHistoryEntry(fileName: "two.txt"),
-                makeHistoryEntry(fileName: "three.txt"),
-                makeHistoryEntry(fileName: "four.txt"),
-                makeHistoryEntry(fileName: "five.txt"),
-                makeHistoryEntry(fileName: "six.txt")
-            ]
+            )
         )
 
         XCTAssertEqual(store.menuSummary.statusSymbol, "paperplane.circle")
@@ -376,6 +392,8 @@ final class FeatureTransferTests: XCTestCase {
         let store = TransferFeatureStore(
             runtime: runtime,
             settingsPersistence: InMemorySettingsPersistence(),
+            historyPersistence: InMemoryHistoryPersistence(),
+            loginItemManaging: FakeLoginItemManaging(),
             snapshot: .default(
                 deviceName: "LocalDrop Test Mac",
                 saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
@@ -408,6 +426,8 @@ final class FeatureTransferTests: XCTestCase {
         let store = TransferFeatureStore(
             runtime: runtime,
             settingsPersistence: persistence,
+            historyPersistence: InMemoryHistoryPersistence(),
+            loginItemManaging: FakeLoginItemManaging(),
             snapshot: .default(
                 deviceName: "LocalDrop Test Mac",
                 saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
@@ -477,6 +497,8 @@ final class FeatureTransferTests: XCTestCase {
         let store = TransferFeatureStore(
             runtime: runtime,
             settingsPersistence: InMemorySettingsPersistence(),
+            historyPersistence: InMemoryHistoryPersistence(),
+            loginItemManaging: FakeLoginItemManaging(),
             snapshot: .default(
                 deviceName: "LocalDrop Test Mac",
                 saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
@@ -516,6 +538,8 @@ final class FeatureTransferTests: XCTestCase {
         let store = TransferFeatureStore(
             runtime: FakeTransferRuntime(),
             settingsPersistence: InMemorySettingsPersistence(),
+            historyPersistence: InMemoryHistoryPersistence(),
+            loginItemManaging: FakeLoginItemManaging(),
             snapshot: .default(
                 deviceName: "LocalDrop Test Mac",
                 saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
@@ -549,6 +573,8 @@ final class FeatureTransferTests: XCTestCase {
         let store = TransferFeatureStore(
             runtime: FakeTransferRuntime(),
             settingsPersistence: InMemorySettingsPersistence(),
+            historyPersistence: InMemoryHistoryPersistence(),
+            loginItemManaging: FakeLoginItemManaging(),
             snapshot: .default(
                 deviceName: "LocalDrop Test Mac",
                 saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
@@ -636,6 +662,8 @@ final class FeatureTransferTests: XCTestCase {
             store: TransferFeatureStore(
                 runtime: runtime,
                 settingsPersistence: InMemorySettingsPersistence(),
+                historyPersistence: InMemoryHistoryPersistence(),
+                loginItemManaging: FakeLoginItemManaging(),
                 snapshot: .default(
                     deviceName: "LocalDrop Test Mac",
                     saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
@@ -679,6 +707,8 @@ final class FeatureTransferTests: XCTestCase {
             store: TransferFeatureStore(
                 runtime: runtime,
                 settingsPersistence: InMemorySettingsPersistence(),
+                historyPersistence: InMemoryHistoryPersistence(),
+                loginItemManaging: FakeLoginItemManaging(),
                 snapshot: .default(
                     deviceName: "LocalDrop Test Mac",
                     saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
@@ -704,6 +734,8 @@ final class FeatureTransferTests: XCTestCase {
         let store = TransferFeatureStore(
             runtime: FakeTransferRuntime(),
             settingsPersistence: InMemorySettingsPersistence(),
+            historyPersistence: InMemoryHistoryPersistence(),
+            loginItemManaging: FakeLoginItemManaging(),
             snapshot: .default(
                 deviceName: "LocalDrop Test Mac",
                 saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
@@ -732,6 +764,8 @@ final class FeatureTransferTests: XCTestCase {
             store: TransferFeatureStore(
                 runtime: runtime,
                 settingsPersistence: InMemorySettingsPersistence(),
+                historyPersistence: InMemoryHistoryPersistence(),
+                loginItemManaging: FakeLoginItemManaging(),
                 snapshot: .default(
                     deviceName: "LocalDrop Test Mac",
                     saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
@@ -799,6 +833,8 @@ final class FeatureTransferTests: XCTestCase {
             store: TransferFeatureStore(
                 runtime: runtime,
                 settingsPersistence: InMemorySettingsPersistence(),
+                historyPersistence: InMemoryHistoryPersistence(),
+                loginItemManaging: FakeLoginItemManaging(),
                 snapshot: .default(
                     deviceName: "LocalDrop Test Mac",
                     saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
@@ -871,6 +907,8 @@ final class FeatureTransferTests: XCTestCase {
         let store = TransferFeatureStore(
             runtime: runtime,
             settingsPersistence: InMemorySettingsPersistence(),
+            historyPersistence: InMemoryHistoryPersistence(),
+            loginItemManaging: FakeLoginItemManaging(),
             snapshot: .default(
                 deviceName: "LocalDrop Test Mac",
                 saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
@@ -909,6 +947,130 @@ final class FeatureTransferTests: XCTestCase {
         XCTAssertTrue(eventNames.contains("transfer.stage.completed"))
         XCTAssertTrue(eventNames.contains("transfer.send.requested"))
         XCTAssertTrue(eventNames.contains("settings.runtime_update.failed"))
+    }
+
+    func testLaunchAtLoginRegistersAndUnregistersLoginItem() {
+        let manager = FakeLoginItemManaging()
+        let persistence = InMemorySettingsPersistence()
+        let store = TransferFeatureStore(
+            runtime: FakeTransferRuntime(),
+            settingsPersistence: persistence,
+            historyPersistence: InMemoryHistoryPersistence(),
+            loginItemManaging: manager,
+            snapshot: .default(
+                deviceName: "LocalDrop Test Mac",
+                saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
+            )
+        )
+
+        store.launchAtLogin = true
+        store.applyLaunchAtLogin()
+
+        XCTAssertTrue(manager.isRegistered)
+        XCTAssertTrue(persistence.savedSnapshots.contains { $0.launchAtLogin == true })
+
+        store.launchAtLogin = false
+        store.applyLaunchAtLogin()
+
+        XCTAssertFalse(manager.isRegistered)
+        XCTAssertTrue(persistence.savedSnapshots.contains { $0.launchAtLogin == false })
+    }
+
+    func testLaunchAtLoginFailureRevertsSettingAndSurfacesFeedback() {
+        let manager = ThrowingLoginItemManager()
+        let store = TransferFeatureStore(
+            runtime: FakeTransferRuntime(),
+            settingsPersistence: InMemorySettingsPersistence(),
+            historyPersistence: InMemoryHistoryPersistence(),
+            loginItemManaging: manager,
+            snapshot: .default(
+                deviceName: "LocalDrop Test Mac",
+                saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
+            )
+        )
+
+        store.launchAtLogin = true
+        store.applyLaunchAtLogin()
+
+        XCTAssertFalse(store.launchAtLogin)
+        XCTAssertNotNil(store.lastErrorMessage)
+        XCTAssertEqual(store.feedback?.message, "Couldn't update Launch at Login")
+    }
+
+    func testUpdateSaveLocationPersistsNewLocation() {
+        let runtime = FakeTransferRuntime()
+        let persistence = InMemorySettingsPersistence()
+        let store = TransferFeatureStore(
+            runtime: runtime,
+            settingsPersistence: persistence,
+            historyPersistence: InMemoryHistoryPersistence(),
+            loginItemManaging: FakeLoginItemManaging(),
+            snapshot: .default(
+                deviceName: "LocalDrop Test Mac",
+                saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
+            )
+        )
+
+        let newLocation = URL(fileURLWithPath: "/tmp/LocalDropTests/Downloads")
+        store.updateSaveLocation(newLocation)
+
+        XCTAssertEqual(store.saveLocation, newLocation.path)
+        XCTAssertEqual(persistence.savedSnapshots.last?.protocolSettings.saveLocation, newLocation)
+    }
+
+    func testHistoryPersistenceAdapterRoundTripsEntries() throws {
+        let directory = makeTempDirectory()
+        let adapter = HistoryPersistenceAdapter(directory: directory)
+        XCTAssertTrue(adapter.load().isEmpty)
+
+        let entries = [
+            makeHistoryEntry(fileName: "a.txt"),
+            makeHistoryEntry(fileName: "b.txt")
+        ]
+        adapter.save(entries)
+
+        let loaded = adapter.load()
+        XCTAssertEqual(loaded.map(\.fileName), ["a.txt", "b.txt"])
+    }
+
+    func testRevealInFinderShowsFeedbackWhenFileIsMissing() {
+        let store = TransferFeatureStore(
+            runtime: FakeTransferRuntime(),
+            settingsPersistence: InMemorySettingsPersistence(),
+            historyPersistence: InMemoryHistoryPersistence(),
+            loginItemManaging: FakeLoginItemManaging(),
+            snapshot: .default(
+                deviceName: "LocalDrop Test Mac",
+                saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
+            )
+        )
+
+        let entry = makeHistoryEntry(
+            fileName: "missing.txt",
+            fileURL: URL(fileURLWithPath: "/tmp/LocalDropTests/missing.txt")
+        )
+        store.revealInFinder(entry)
+
+        XCTAssertEqual(store.feedback?.message, "File no longer available")
+        XCTAssertEqual(store.feedback?.tone, .destructive)
+    }
+
+    func testOpenHistoryItemNoOpsWhenFileURLIsAbsent() {
+        let store = TransferFeatureStore(
+            runtime: FakeTransferRuntime(),
+            settingsPersistence: InMemorySettingsPersistence(),
+            historyPersistence: InMemoryHistoryPersistence(),
+            loginItemManaging: FakeLoginItemManaging(),
+            snapshot: .default(
+                deviceName: "LocalDrop Test Mac",
+                saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
+            )
+        )
+
+        let entry = makeHistoryEntry(fileName: "no-url.txt", fileURL: nil)
+        store.openHistoryItem(entry)
+
+        XCTAssertNil(store.feedback)
     }
 
     func testRuntimeAdapterEmitsRestartAndSkipLogs() async throws {
@@ -972,14 +1134,21 @@ final class FeatureTransferTests: XCTestCase {
         XCTAssertTrue(result, file: file, line: line)
     }
 
-    private func makeHistoryEntry(fileName: String) -> HistoryEntry {
+    private func makeHistoryEntry(
+        fileName: String,
+        timestamp: Date = Date(),
+        direction: TransferDirection = .received,
+        outcome: TransferOutcome = .completed,
+        fileURL: URL? = nil
+    ) -> HistoryEntry {
         HistoryEntry(
             fileName: fileName,
             counterpart: "Peer",
             size: "1 KB",
-            timestamp: "Today",
-            direction: .received,
-            outcome: .completed
+            timestamp: timestamp,
+            direction: direction,
+            outcome: outcome,
+            fileURL: fileURL
         )
     }
 
@@ -1141,9 +1310,34 @@ private actor RuntimeComponentRecorder {
     }
 }
 
+private final class FakeLoginItemManaging: LoginItemManaging, @unchecked Sendable {
+    var isRegistered = false
+
+    func register() throws {
+        isRegistered = true
+    }
+
+    func unregister() throws {
+        isRegistered = false
+    }
+}
+
+private final class ThrowingLoginItemManager: LoginItemManaging, @unchecked Sendable {
+    var isRegistered = false
+
+    func register() throws {
+        throw TestFailure.loginItemRegistrationFailed
+    }
+
+    func unregister() throws {
+        throw TestFailure.loginItemRegistrationFailed
+    }
+}
+
 private enum TestFailure: LocalizedError {
     case nodeDidNotStart
     case runtimeApplyFailed
+    case loginItemRegistrationFailed
 
     var errorDescription: String? {
         switch self {
@@ -1151,6 +1345,8 @@ private enum TestFailure: LocalizedError {
             "Node did not start"
         case .runtimeApplyFailed:
             "Runtime apply failed"
+        case .loginItemRegistrationFailed:
+            "Login item registration failed"
         }
     }
 }

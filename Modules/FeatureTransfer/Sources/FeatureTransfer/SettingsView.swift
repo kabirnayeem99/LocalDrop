@@ -127,7 +127,7 @@ struct SettingsView: View {
         .onChange(of: store.accentColor) { _, _ in store.persistSettings() }
         .onChange(of: store.language) { _, _ in store.persistSettings() }
         .onChange(of: store.minimizeToMenuBar) { _, _ in store.persistSettings() }
-        .onChange(of: store.launchAtLogin) { _, _ in store.persistSettings() }
+        .onChange(of: store.launchAtLogin) { _, _ in store.applyLaunchAtLogin() }
         .onChange(of: store.reduceMotion) { _, _ in store.persistSettings() }
         .onChange(of: store.requirePIN) { _, newValue in
             if newValue {
@@ -232,7 +232,7 @@ private struct AccentSwatchRow: View {
                     selection = accent
                 } label: {
                     Circle()
-                        .fill(accent.swatchColor)
+                        .fill(accent.resolvedColor)
                         .frame(width: 22, height: 22)
                         .overlay {
                             if selection == accent {
@@ -244,7 +244,7 @@ private struct AccentSwatchRow: View {
                         .overlay {
                             Circle()
                                 .strokeBorder(
-                                    selection == accent || hovering == accent ? accent.swatchColor : Color(nsColor: .separatorColor),
+                                    selection == accent || hovering == accent ? accent.resolvedColor : Color(nsColor: .separatorColor),
                                     lineWidth: selection == accent ? 2 : 1
                                 )
                                 .padding(selection == accent ? -4 : -2)
@@ -283,17 +283,3 @@ private enum SecurityDialog: Identifiable {
     }
 }
 
-private extension AccentColorChoice {
-    var swatchColor: Color {
-        switch self {
-        case .green:
-            return AccentColor.primary
-        case .blue:
-            return Color(nsColor: .systemBlue)
-        case .orange:
-            return Color(nsColor: .systemOrange)
-        case .purple:
-            return Color(nsColor: .systemPurple)
-        }
-    }
-}

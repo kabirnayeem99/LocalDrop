@@ -232,10 +232,11 @@ extension HistoryEntry: Equatable {
             && lhs.timestamp == rhs.timestamp
             && lhs.direction == rhs.direction
             && lhs.outcome == rhs.outcome
+            && lhs.fileURL == rhs.fileURL
     }
 
     var menuTitle: String {
-        "\(fileName) — \(timestamp)"
+        "\(fileName) — \(timestampDisplay)"
     }
 }
 

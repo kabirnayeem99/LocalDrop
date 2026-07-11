@@ -1,3 +1,4 @@
+import AppKit
 import AppLogging
 import Foundation
 import Observation
@@ -34,7 +35,10 @@ final class TransferFeatureStore {
     var lastErrorMessage: String?
     private let runtime: any TransferRuntime
     private let settingsPersistence: any TransferSettingsPersisting
+    private let historyPersistence: any HistoryPersisting
+    private let loginItemManaging: any LoginItemManaging
     private let logger: AppLogger
+    static let maxHistoryEntries = 200
     private var hasStarted = false
     @ObservationIgnored
     nonisolated(unsafe) private var observationTasks: [Task<Void, Never>] = []
@@ -46,12 +50,15 @@ final class TransferFeatureStore {
     init(
         runtime: any TransferRuntime,
         settingsPersistence: any TransferSettingsPersisting,
+        historyPersistence: any HistoryPersisting,
+        loginItemManaging: any LoginItemManaging,
         snapshot: TransferSettingsSnapshot,
-        logger: AppLogger = .disabled(),
-        historyEntries: [HistoryEntry] = HistoryEntry.samples
+        logger: AppLogger = .disabled()
     ) {
         self.runtime = runtime
         self.settingsPersistence = settingsPersistence
+        self.historyPersistence = historyPersistence
+        self.loginItemManaging = loginItemManaging
         self.logger = logger
         self.quickSave = snapshot.quickSave
         self.appearance = snapshot.appearance
@@ -68,7 +75,7 @@ final class TransferFeatureStore {
         self.incomingPIN = snapshot.protocolSettings.incomingPIN
         self.allowDownloads = snapshot.protocolSettings.allowDownloads
         self.useHTTPS = snapshot.protocolSettings.useHTTPS
-        self.historyEntries = historyEntries
+        self.historyEntries = historyPersistence.load()
     }
 
     deinit {
@@ -262,6 +269,19 @@ final class TransferFeatureStore {
         showFeedback(
             TransferFeedback(message: "Transfer declined", symbol: "xmark.circle.fill", tone: .destructive)
         )
+        for file in request.files {
+            appendHistoryEntry(
+                HistoryEntry(
+                    fileName: file.name,
+                    counterpart: request.deviceName,
+                    size: file.size,
+                    timestamp: Date(),
+                    direction: .received,
+                    outcome: .declined,
+                    fileURL: nil
+                )
+            )
+        }
         Task {
             try? await runtime.respondToIncomingRequest(.reject(requestID: request.id))
         }
@@ -334,6 +354,71 @@ final class TransferFeatureStore {
 
     func clearHistory() {
         historyEntries.removeAll()
+        historyPersistence.save(historyEntries)
+    }
+
+    func revealInFinder(_ entry: HistoryEntry) {
+        guard let url = resolvedHistoryFileURL(for: entry) else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    func openHistoryItem(_ entry: HistoryEntry) {
+        guard let url = resolvedHistoryFileURL(for: entry) else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    /// Returns the on-disk URL for a history entry when it still exists, or
+    /// `nil` (surfacing a feedback banner for missing files) so callers can
+    /// no-op safely without touching AppKit.
+    private func resolvedHistoryFileURL(for entry: HistoryEntry) -> URL? {
+        guard let url = entry.fileURL else { return nil }
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            showFeedback(
+                TransferFeedback(
+                    message: "File no longer available",
+                    symbol: "exclamationmark.triangle.fill",
+                    tone: .destructive
+                )
+            )
+            return nil
+        }
+        return url
+    }
+
+    private func appendHistoryEntry(_ entry: HistoryEntry) {
+        historyEntries.insert(entry, at: 0)
+        if historyEntries.count > Self.maxHistoryEntries {
+            historyEntries.removeLast(historyEntries.count - Self.maxHistoryEntries)
+        }
+        historyPersistence.save(historyEntries)
+    }
+
+    func applyLaunchAtLogin() {
+        let desired = launchAtLogin
+        // Reality already matches the request (e.g. after a reverted failure re-fires this
+        // via onChange); persist quietly without re-touching the login item or clobbering feedback.
+        guard loginItemManaging.isRegistered != desired else {
+            settingsPersistence.save(makeSnapshot())
+            return
+        }
+        do {
+            if desired {
+                try loginItemManaging.register()
+            } else {
+                try loginItemManaging.unregister()
+            }
+            persistSettings()
+        } catch {
+            recordError(event: "settings.launch_at_login.failed", error: error)
+            showFeedback(
+                TransferFeedback(
+                    message: "Couldn't update Launch at Login",
+                    symbol: "exclamationmark.triangle.fill",
+                    tone: .destructive
+                )
+            )
+            launchAtLogin = !desired
+        }
     }
 
     func persistSettings() {
@@ -460,7 +545,7 @@ final class TransferFeatureStore {
                     if progress.progress >= 1 {
                         self.logger.emit(
                             level: .info,
-                            event: "transfer.send.completed",
+                            event: progress.direction == .sending ? "transfer.send.completed" : "transfer.receive.completed",
                             scope: "TransferFeatureStore",
                             attributes: [
                                 .string("transfer.session_id", progress.id),
@@ -469,11 +554,12 @@ final class TransferFeatureStore {
                         )
                         self.showFeedback(
                             TransferFeedback(
-                                message: "Transfer completed",
+                                message: "\(progress.fileName) \(progress.direction == .sending ? "sent" : "received")",
                                 symbol: "checkmark.circle.fill",
                                 tone: .success
                             )
                         )
+                        self.appendHistoryEntry(Self.makeCompletedHistoryEntry(from: progress))
                         self.scheduleProgressCompletionDismiss(for: progress)
                     }
                 }
@@ -548,6 +634,21 @@ final class TransferFeatureStore {
                 .string("error.message", error.localizedDescription),
                 .string("error.type", String(describing: type(of: error)))
             ]
+        )
+    }
+
+    private static func makeCompletedHistoryEntry(from progress: ActiveTransferProgress) -> HistoryEntry {
+        let size = progress.byteCount.map {
+            ByteCountFormatter.string(fromByteCount: $0, countStyle: .file)
+        } ?? "—"
+        return HistoryEntry(
+            fileName: progress.fileName,
+            counterpart: progress.counterpartName,
+            size: size,
+            timestamp: Date(),
+            direction: progress.direction == .sending ? .sent : .received,
+            outcome: .completed,
+            fileURL: progress.fileURL
         )
     }
 

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import FeatureTransfer
 import Darwin
@@ -6,6 +7,7 @@ import UniformTypeIdentifiers
 @main
 struct LocalDropApp: App {
     @Environment(\.openWindow) private var openWindow
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var container: TransferFeatureContainer
     @State private var isFileImporterPresented = false
     @State private var isFolderImporterPresented = false
@@ -62,6 +64,9 @@ struct LocalDropApp: App {
                     )
                 }
                 .task {
+                    appDelegate.minimizeToMenuBarProvider = {
+                        MainActor.assumeIsolated { container.shouldMinimizeToMenuBar }
+                    }
                     await container.startIfNeeded()
                 }
         }
@@ -260,5 +265,15 @@ struct LocalDropApp: App {
             return url
         }
         container.stageImportedItems(urls)
+    }
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    var minimizeToMenuBarProvider: (() -> Bool)?
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        // When the user opted into minimize-to-menu-bar, keep the process alive on last
+        // window close so the MenuBarExtra stays reachable; otherwise quit as before.
+        !(minimizeToMenuBarProvider?() ?? false)
     }
 }

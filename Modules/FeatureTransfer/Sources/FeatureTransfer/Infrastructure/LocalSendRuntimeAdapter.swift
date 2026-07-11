@@ -23,6 +23,8 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
     private var restartGeneration = 0
     private var activeSendSession: ActiveSendSession?
     private var lastReceiveStatusKey: String?
+    private var emittedReceivedFileKeys: Set<String> = []
+    private var emittedReceivedFileKeysSessionID: String?
 
     init(
         components: LiveRuntimeComponents,
@@ -243,7 +245,9 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
                     fileName: item.name,
                     progress: Double(index) / Double(totalCount),
                     throughput: "Preparing…",
-                    etaDescription: "\(totalCount - index) item(s) remaining"
+                    etaDescription: "\(totalCount - index) item(s) remaining",
+                    byteCount: item.byteCount,
+                    fileURL: item.fileURL
                 )
             )
 
@@ -303,7 +307,9 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
                     fileName: item.name,
                     progress: Double(index + 1) / Double(totalCount),
                     throughput: byteCount > 0 ? ByteCountFormatter.string(fromByteCount: byteCount, countStyle: .file) : "Uploaded",
-                    etaDescription: index + 1 == totalCount ? "Complete" : "\(totalCount - index - 1) item(s) remaining"
+                    etaDescription: index + 1 == totalCount ? "Complete" : "\(totalCount - index - 1) item(s) remaining",
+                    byteCount: byteCount > 0 ? byteCount : nil,
+                    fileURL: item.fileURL
                 )
             )
         }
@@ -408,6 +414,38 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
                                 attributes: [.string("transfer.file_name", leadFile.fileName)]
                             )
                         }
+                    }
+
+                    if receiveSession.status == .finished {
+                        // Emit one completion event per received file so every file
+                        // (not just the lead file) is surfaced and recorded. Guarded
+                        // by a per-session/per-file key set because the runtime stream
+                        // may report `.finished` repeatedly. Reset the key set on a new
+                        // session so it doesn't grow unbounded across the app's lifetime.
+                        if emittedReceivedFileKeysSessionID != receiveSession.sessionId {
+                            emittedReceivedFileKeys.removeAll()
+                            emittedReceivedFileKeysSessionID = receiveSession.sessionId
+                        }
+                        let sortedRecords = receiveSession.files.values.sorted { $0.file.fileName < $1.file.fileName }
+                        for record in sortedRecords {
+                            let key = "\(receiveSession.sessionId):\(record.file.id)"
+                            guard emittedReceivedFileKeys.contains(key) == false else { continue }
+                            emittedReceivedFileKeys.insert(key)
+                            await progressBroadcaster.yield(
+                                ActiveTransferProgress(
+                                    id: receiveSession.sessionId,
+                                    direction: .receiving,
+                                    counterpartName: receiveSession.senderInfo.alias,
+                                    fileName: record.file.fileName,
+                                    progress: 1.0,
+                                    throughput: "Saved",
+                                    etaDescription: etaDescription,
+                                    byteCount: record.file.size,
+                                    fileURL: record.destinationURL
+                                )
+                            )
+                        }
+                    } else if let leadFile {
                         await progressBroadcaster.yield(
                             ActiveTransferProgress(
                                 id: receiveSession.sessionId,
@@ -415,7 +453,7 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
                                 counterpartName: receiveSession.senderInfo.alias,
                                 fileName: leadFile.fileName,
                                 progress: statusProgress,
-                                throughput: receiveSession.status == .finished ? "Saved" : "Receiving",
+                                throughput: "Receiving",
                                 etaDescription: etaDescription
                             )
                         )

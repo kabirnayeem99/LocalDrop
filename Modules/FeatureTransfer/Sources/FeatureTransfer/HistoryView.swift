@@ -31,7 +31,7 @@ struct HistoryView: View {
             } else {
                 List {
                     ForEach(store.historyEntries) { entry in
-                        HistoryRowView(entry: entry)
+                        HistoryRowView(entry: entry, store: store)
                             .transition(.move(edge: .leading).combined(with: .opacity))
                     }
                 }

@@ -9,6 +9,8 @@ struct LocalDropApp: App {
     @State private var container: TransferFeatureContainer
     @State private var isFileImporterPresented = false
     @State private var isFolderImporterPresented = false
+    @State private var isTextEntryPresented = false
+    @State private var textEntryDraft = ""
 
     init() {
         let arguments = ProcessInfo.processInfo.arguments
@@ -23,7 +25,7 @@ struct LocalDropApp: App {
 
     var body: some Scene {
         WindowGroup(id: "main") {
-            container.rootView
+            container.rootView(sendEntryActions: sendEntryActions)
                 .fileImporter(
                     isPresented: $isFileImporterPresented,
                     allowedContentTypes: [.item],
@@ -40,6 +42,13 @@ struct LocalDropApp: App {
                     onCancellation: {}
                 )
                 .fileDialogMessage(Text("Choose folders to send"))
+                .sheet(isPresented: $isTextEntryPresented) {
+                    SendTextEntrySheet(
+                        initialText: textEntryDraft,
+                        onStage: stageText,
+                        onCancel: dismissTextSheet
+                    )
+                }
                 .task {
                     await container.startIfNeeded()
                 }
@@ -59,9 +68,10 @@ struct LocalDropApp: App {
                 }
                 .keyboardShortcut("o", modifiers: [.command, .shift])
 
-                Button("Send Text…") {}
+                Button("Send Text…") {
+                    showTextEntry()
+                }
                     .keyboardShortcut("t", modifiers: [.command])
-                    .disabled(true)
 
                 Divider()
 
@@ -116,6 +126,7 @@ struct LocalDropApp: App {
                 actions: TransferMenuActions(
                     sendFiles: showFileImporter,
                     sendFolders: showFolderImporter,
+                    sendTextOrClipboard: sendTextOrClipboard,
                     openLocalDrop: openLocalDrop,
                     openPreferences: openPreferences,
                     quit: terminate
@@ -133,6 +144,15 @@ struct LocalDropApp: App {
 
     private func showFolderImporter() {
         isFolderImporterPresented = true
+    }
+
+    private var sendEntryActions: SendEntryActions {
+        SendEntryActions(
+            sendFiles: showFileImporter,
+            sendFolders: showFolderImporter,
+            sendText: { showTextEntry() },
+            sendClipboard: sendTextOrClipboard
+        )
     }
 
     private func openLocalDrop() {
@@ -158,6 +178,37 @@ struct LocalDropApp: App {
             openLocalDrop()
         case .failure(let error):
             container.reportImportFailure(error)
+        }
+    }
+
+    private func showTextEntry(prefilledText: String = "") {
+        textEntryDraft = prefilledText
+        container.showSend()
+        isTextEntryPresented = true
+        openLocalDrop()
+    }
+
+    private func dismissTextSheet() {
+        isTextEntryPresented = false
+        textEntryDraft = ""
+    }
+
+    private func stageText(_ text: String) {
+        if container.stagePastedText(text) {
+            dismissTextSheet()
+            openLocalDrop()
+        }
+    }
+
+    private func sendTextOrClipboard() {
+        container.showSend()
+        switch container.stageClipboardTextIfAvailable() {
+        case .staged:
+            openLocalDrop()
+        case .requiresTextEntry:
+            showTextEntry()
+        case .failed:
+            openLocalDrop()
         }
     }
 }

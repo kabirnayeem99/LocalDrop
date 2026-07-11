@@ -1,5 +1,6 @@
 import XCTest
 @testable import FeatureTransfer
+import AppLogging
 import LocalSendKit
 
 @MainActor
@@ -580,6 +581,216 @@ final class FeatureTransferTests: XCTestCase {
         XCTAssertEqual(protocolHistory, [.https])
     }
 
+    func testSendEntryKindDispatchesExpectedActions() {
+        var invoked: [String] = []
+        let actions = SendEntryActions(
+            sendFiles: { invoked.append("file") },
+            sendFolders: { invoked.append("folder") },
+            sendText: { invoked.append("text") },
+            sendClipboard: { invoked.append("clipboard") }
+        )
+
+        for kind in SendEntryKind.allCases {
+            kind.perform(using: actions)
+        }
+
+        XCTAssertEqual(invoked, ["file", "folder", "text", "clipboard"])
+    }
+
+    func testContainerStagesGeneratedTextFileAndShowsSendScreen() async throws {
+        let runtime = FakeTransferRuntime()
+        let container = TransferFeatureContainer(
+            store: TransferFeatureStore(
+                runtime: runtime,
+                settingsPersistence: InMemorySettingsPersistence(),
+                snapshot: .default(
+                    deviceName: "LocalDrop Test Mac",
+                    saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
+                )
+            ),
+            logger: .disabled()
+        )
+        let directory = makeTempDirectory()
+
+        XCTAssertTrue(container.stagePastedText("  hello localdrop  ", in: directory))
+
+        await waitUntil { await runtime.stagedItems.count == 1 }
+        let stagedItems = await runtime.stagedItems
+        let stagedFile = try XCTUnwrap(stagedItems.first)
+        let text = try String(contentsOf: stagedFile.fileURL)
+        XCTAssertEqual(text, "hello localdrop")
+        XCTAssertEqual(stagedFile.fileURL.pathExtension, "txt")
+        XCTAssertEqual(container.store.screen, .send)
+    }
+
+    func testContainerRejectsEmptyTextInputWithVisibleFailure() {
+        let container = TransferFeatureContainer.testing()
+
+        XCTAssertFalse(container.stagePastedText("   \n\t"))
+        XCTAssertEqual(container.store.lastErrorMessage, "Text cannot be empty.")
+        XCTAssertEqual(container.store.feedback?.tone, .destructive)
+        XCTAssertEqual(container.store.screen, .send)
+    }
+
+    func testClipboardFallbackReturnsRequiresTextEntryWhenStringMissing() {
+        let container = TransferFeatureContainer.testing()
+
+        let result = container.stageClipboardTextIfAvailable(stringProvider: { nil })
+
+        XCTAssertEqual(result, .requiresTextEntry)
+    }
+
+    func testClipboardTextStagesWhenAvailable() async throws {
+        let runtime = FakeTransferRuntime()
+        let container = TransferFeatureContainer(
+            store: TransferFeatureStore(
+                runtime: runtime,
+                settingsPersistence: InMemorySettingsPersistence(),
+                snapshot: .default(
+                    deviceName: "LocalDrop Test Mac",
+                    saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
+                )
+            ),
+            logger: .disabled()
+        )
+        let directory = makeTempDirectory()
+
+        let result = container.stageClipboardTextIfAvailable(
+            stringProvider: { "from clipboard" },
+            in: directory
+        )
+
+        XCTAssertEqual(result, .staged)
+        await waitUntil { await runtime.stagedItems.count == 1 }
+        let stagedItems = await runtime.stagedItems
+        let stagedFile = try XCTUnwrap(stagedItems.first?.fileURL)
+        XCTAssertEqual(try String(contentsOf: stagedFile), "from clipboard")
+    }
+
+    func testSendTextAndSendViewsBuildWithEntryActions() {
+        let store = TransferFeatureStore(
+            runtime: FakeTransferRuntime(),
+            settingsPersistence: InMemorySettingsPersistence(),
+            snapshot: .default(
+                deviceName: "LocalDrop Test Mac",
+                saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
+            )
+        )
+        let actions = SendEntryActions(
+            sendFiles: {},
+            sendFolders: {},
+            sendText: {},
+            sendClipboard: {}
+        )
+
+        _ = SendView(store: store, actions: actions).body
+        _ = RootView(store: store, sendEntryActions: actions).body
+        _ = SendTextEntrySheet(initialText: "", onStage: { _ in }, onCancel: {}).body
+        _ = SendTextEntrySheet(initialText: "hello", onStage: { _ in }, onCancel: {}).body
+    }
+
+    func testStoreEmitsStructuredLogsForStartStageSendAndSettingsFailure() async {
+        let sink = RecordingLogSink()
+        let logger = AppLogger(
+            configuration: AppLoggerConfiguration(minimumLevel: .info, redactSensitiveValues: true),
+            resource: [.string("service.name", "LocalDrop")],
+            sinks: [sink],
+            clock: AppLogClock(now: { 42 })
+        )
+        let runtime = FakeTransferRuntime()
+        await runtime.setUpdateSettingsError(TestFailure.runtimeApplyFailed)
+        let store = TransferFeatureStore(
+            runtime: runtime,
+            settingsPersistence: InMemorySettingsPersistence(),
+            snapshot: .default(
+                deviceName: "LocalDrop Test Mac",
+                saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
+            ),
+            logger: logger
+        )
+
+        await store.start()
+        store.stageDroppedItems([URL(fileURLWithPath: "/tmp/LocalDropTests/report.pdf")])
+        store.send(to: "peer-id")
+        store.useHTTPS = false
+        store.persistSettings()
+
+        await waitUntil {
+            let eventNames = await sink.records().compactMap { record -> String? in
+                if case .string(let value) = record.attributes["event.name"] {
+                    return value
+                }
+                return nil
+            }
+            return eventNames.contains("app.runtime.start.requested")
+                && eventNames.contains("app.runtime.start.succeeded")
+                && eventNames.contains("transfer.stage.completed")
+                && eventNames.contains("transfer.send.requested")
+                && eventNames.contains("settings.runtime_update.failed")
+        }
+
+        let eventNames = await sink.records().compactMap { record -> String? in
+            if case .string(let value) = record.attributes["event.name"] {
+                return value
+            }
+            return nil
+        }
+        XCTAssertTrue(eventNames.contains("app.runtime.start.requested"))
+        XCTAssertTrue(eventNames.contains("app.runtime.start.succeeded"))
+        XCTAssertTrue(eventNames.contains("transfer.stage.completed"))
+        XCTAssertTrue(eventNames.contains("transfer.send.requested"))
+        XCTAssertTrue(eventNames.contains("settings.runtime_update.failed"))
+    }
+
+    func testRuntimeAdapterEmitsRestartAndSkipLogs() async throws {
+        let sink = RecordingLogSink()
+        let logger = AppLogger(
+            configuration: AppLoggerConfiguration(minimumLevel: .debug, redactSensitiveValues: true),
+            resource: [.string("service.name", "LocalDrop")],
+            sinks: [sink]
+        )
+        let recorder = RuntimeComponentRecorder()
+        let settings = TransferProtocolSettings(
+            deviceName: "LocalDrop Test Mac",
+            tcpPort: 0,
+            requirePIN: false,
+            incomingPIN: "123456",
+            allowDownloads: true,
+            useHTTPS: true,
+            saveLocation: makeTempDirectory()
+        )
+        let adapter = try makeLiveRuntimeAdapter(settings: settings, recorder: recorder, logger: logger)
+        defer { Task { await adapter.stop() } }
+
+        try await adapter.updateSettings(settings)
+        var updatedSettings = settings
+        updatedSettings.useHTTPS = false
+        updatedSettings.saveLocation = makeTempDirectory()
+        try await adapter.updateSettings(updatedSettings)
+
+        await waitUntil {
+            let eventNames = await sink.records().compactMap { record -> String? in
+                if case .string(let value) = record.attributes["event.name"] {
+                    return value
+                }
+                return nil
+            }
+            return eventNames.contains("settings.runtime_restart.skipped_unchanged")
+                && eventNames.contains("settings.runtime_restart.started")
+                && eventNames.contains("settings.runtime_restart.completed")
+        }
+
+        let eventNames = await sink.records().compactMap { record -> String? in
+            if case .string(let value) = record.attributes["event.name"] {
+                return value
+            }
+            return nil
+        }
+        XCTAssertTrue(eventNames.contains("settings.runtime_restart.skipped_unchanged"))
+        XCTAssertTrue(eventNames.contains("settings.runtime_restart.started"))
+        XCTAssertTrue(eventNames.contains("settings.runtime_restart.completed"))
+    }
+
     private func waitUntil(
         _ predicate: @escaping @MainActor () async -> Bool,
         file: StaticString = #filePath,
@@ -615,7 +826,8 @@ final class FeatureTransferTests: XCTestCase {
 
     private func makeLiveRuntimeAdapter(
         settings: TransferProtocolSettings,
-        recorder: RuntimeComponentRecorder
+        recorder: RuntimeComponentRecorder,
+        logger: AppLogger = .disabled()
     ) throws -> LocalSendRuntimeAdapter {
         let certificateStore = FileCertificateStore(
             identityURL: makeTempDirectory().appendingPathComponent("identity.json")
@@ -654,7 +866,8 @@ final class FeatureTransferTests: XCTestCase {
         return LocalSendRuntimeAdapter(
             components: try makeComponents(settings),
             settings: settings,
-            makeComponents: makeComponents
+            makeComponents: makeComponents,
+            logger: logger
         )
     }
 

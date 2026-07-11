@@ -3,9 +3,11 @@ import DesignSystem
 
 struct RootView: View {
     @Bindable private var store: TransferFeatureStore
+    private let sendEntryActions: SendEntryActions
 
-    init(store: TransferFeatureStore) {
+    init(store: TransferFeatureStore, sendEntryActions: SendEntryActions = .noop) {
         self._store = Bindable(store)
+        self.sendEntryActions = sendEntryActions
     }
 
     var body: some View {
@@ -91,7 +93,7 @@ struct RootView: View {
             ReceiveView(store: store)
                 .accessibilityIdentifier("screen-receive")
         case .send:
-            SendView(store: store)
+            SendView(store: store, actions: sendEntryActions)
                 .accessibilityIdentifier("screen-send")
         case .history:
             HistoryView(store: store)

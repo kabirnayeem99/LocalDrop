@@ -4,6 +4,8 @@ options:
   deploymentTarget:
     macOS: "14.0"
 packages:
+  AppLogging:
+    path: Modules/AppLogging
   LocalSendKit:
     path: Modules/LocalSendKit
   DesignSystem:

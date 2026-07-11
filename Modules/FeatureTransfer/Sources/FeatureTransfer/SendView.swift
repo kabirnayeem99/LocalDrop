@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 
 struct SendView: View {
     @Bindable var store: TransferFeatureStore
+    let actions: SendEntryActions
 
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     @Environment(\.appReducesMotion) private var appReduceMotion
@@ -12,17 +13,15 @@ struct SendView: View {
     @State private var dropZoneState: DropZoneInteractionState = .idle
     @State private var dropZoneResetTask: Task<Void, Never>?
     @State private var dropZoneStateToken = 0
-    @State private var selectedSelectionType = "File"
-
-    private let selectionTypes: [(symbol: String, label: String)] = [
-        ("doc", "File"),
-        ("folder", "Folder"),
-        ("text.alignleft", "Text"),
-        ("doc.on.clipboard", "Paste")
-    ]
+    @State private var selectedSelectionType: SendEntryKind = .file
 
     private let columns = [GridItem(.flexible(), spacing: Spacing.sm), GridItem(.flexible(), spacing: Spacing.sm)]
     private let selectionColumns = Array(repeating: GridItem(.flexible(), spacing: Spacing.sm), count: 4)
+
+    init(store: TransferFeatureStore, actions: SendEntryActions = .noop) {
+        self._store = Bindable(store)
+        self.actions = actions
+    }
 
     var body: some View {
         ScrollView {
@@ -30,13 +29,14 @@ struct SendView: View {
                 sectionTitle("Selection")
 
                 LazyVGrid(columns: selectionColumns, spacing: Spacing.sm) {
-                    ForEach(selectionTypes, id: \.label) { type in
+                    ForEach(SendEntryKind.allCases) { type in
                         SelectionTypeButton(
                             symbol: type.symbol,
-                            label: type.label,
-                            isSelected: selectedSelectionType == type.label
+                            label: type.rawValue,
+                            isSelected: selectedSelectionType == type
                         ) {
-                            selectedSelectionType = type.label
+                            selectedSelectionType = type
+                            type.perform(using: actions)
                         }
                     }
                 }

@@ -1,3 +1,5 @@
+import AppLogging
+import AppKit
 import Foundation
 import LocalSendKit
 import SwiftUI
@@ -5,13 +7,19 @@ import SwiftUI
 @MainActor
 public final class TransferFeatureContainer {
     let store: TransferFeatureStore
+    private let logger: AppLogger
 
-    init(store: TransferFeatureStore) {
+    init(store: TransferFeatureStore, logger: AppLogger) {
         self.store = store
+        self.logger = logger
     }
 
     public var rootView: some View {
         RootView(store: store)
+    }
+
+    public func rootView(sendEntryActions: SendEntryActions) -> some View {
+        RootView(store: store, sendEntryActions: sendEntryActions)
     }
 
     public var menuStatusSymbol: String {
@@ -28,6 +36,7 @@ public final class TransferFeatureContainer {
 
     public func stop() async {
         await store.stop()
+        await logger.flush()
     }
 
     public func showReceive() {
@@ -51,11 +60,83 @@ public final class TransferFeatureContainer {
     }
 
     public func stageImportedItems(_ urls: [URL]) {
+        logger.emit(
+            level: .info,
+            event: "app.import.files.selected",
+            scope: "TransferFeatureContainer",
+            attributes: [
+                .int("event.file_count", urls.count),
+                .string("app.screen", Screen.send.rawValue)
+            ]
+        )
         store.stageDroppedItems(urls)
         store.screen = .send
     }
 
+    @discardableResult
+    public func stagePastedText(
+        _ text: String,
+        in directory: URL? = nil,
+        fileManager: FileManager = .default
+    ) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else {
+            recordTextStagingFailure(
+                message: "Text cannot be empty.",
+                event: "app.import.text.empty"
+            )
+            return false
+        }
+
+        let directory = directory ?? Self.outboundTextDirectory(fileManager: fileManager)
+        let fileURL = directory.appendingPathComponent(Self.generatedTextFilename(), isDirectory: false)
+
+        do {
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+            try trimmed.write(to: fileURL, atomically: true, encoding: .utf8)
+            logger.emit(
+                level: .info,
+                event: "app.import.text.staged",
+                scope: "TransferFeatureContainer",
+                attributes: [
+                    .string("transfer.file_name", fileURL.lastPathComponent),
+                    .int("transfer.character_count", trimmed.count)
+                ]
+            )
+            store.stageDroppedItems([fileURL])
+            store.screen = .send
+            return true
+        } catch {
+            recordTextStagingFailure(
+                message: "Text could not be staged.",
+                event: "app.import.text.failed",
+                error: error
+            )
+            return false
+        }
+    }
+
+    public func stageClipboardTextIfAvailable(
+        stringProvider: () -> String? = { NSPasteboard.general.string(forType: .string) },
+        in directory: URL? = nil,
+        fileManager: FileManager = .default
+    ) -> ClipboardTextStagingResult {
+        guard let text = stringProvider()?.trimmingCharacters(in: .whitespacesAndNewlines), text.isEmpty == false else {
+            return .requiresTextEntry
+        }
+        return stagePastedText(text, in: directory, fileManager: fileManager) ? .staged : .failed
+    }
+
     public func reportImportFailure(_ error: any Error) {
+        logger.emit(
+            level: .error,
+            event: "app.import.files.failed",
+            scope: "TransferFeatureContainer",
+            attributes: [
+                .string("result", "failure"),
+                .string("error.message", error.localizedDescription)
+            ]
+        )
         store.lastErrorMessage = error.localizedDescription
     }
 
@@ -64,6 +145,7 @@ public final class TransferFeatureContainer {
         fileManager: FileManager = .default
     ) -> TransferFeatureContainer {
         let baseDirectory = applicationSupportDirectory(fileManager: fileManager)
+        let logger = makeLogger(baseDirectory: baseDirectory)
         let saveLocation = defaultSaveLocation(fileManager: fileManager)
         let deviceName = Host.current().localizedName ?? "LocalDrop Mac"
         let defaultSnapshot = TransferSettingsSnapshot.default(deviceName: deviceName, saveLocation: saveLocation)
@@ -72,6 +154,17 @@ public final class TransferFeatureContainer {
             fallback: defaultSnapshot
         )
         let snapshot = settingsPersistence.load()
+
+        logger.emit(
+            level: .info,
+            event: "app.launch.completed",
+            scope: "TransferFeatureContainer",
+            attributes: [
+                .string("app.component", "TransferFeatureContainer"),
+                .bool("settings.use_https", snapshot.protocolSettings.useHTTPS),
+                .bool("settings.allow_downloads", snapshot.protocolSettings.allowDownloads)
+            ]
+        )
 
         do {
             let identityURL = baseDirectory.appendingPathComponent("identity.json")
@@ -106,24 +199,37 @@ public final class TransferFeatureContainer {
             let runtime = LocalSendRuntimeAdapter(
                 components: try makeComponents(snapshot.protocolSettings),
                 settings: snapshot.protocolSettings,
-                makeComponents: makeComponents
+                makeComponents: makeComponents,
+                logger: logger
             )
             let store = TransferFeatureStore(
                 runtime: runtime,
                 settingsPersistence: settingsPersistence,
-                snapshot: snapshot
+                snapshot: snapshot,
+                logger: logger
             )
-            return TransferFeatureContainer(store: store)
+            return TransferFeatureContainer(store: store, logger: logger)
         } catch {
+            logger.emit(
+                level: .critical,
+                event: "app.runtime.start.failed",
+                scope: "TransferFeatureContainer",
+                attributes: [
+                    .string("result", "failure"),
+                    .string("error.message", error.localizedDescription),
+                    .string("app.component", "NoopTransferRuntime")
+                ]
+            )
             let runtime = NoopTransferRuntime()
             let store = TransferFeatureStore(
                 runtime: runtime,
                 settingsPersistence: settingsPersistence,
-                snapshot: snapshot
+                snapshot: snapshot,
+                logger: logger
             )
             store.lastErrorMessage = error.localizedDescription
             store.runtimeStatusText = "Unavailable"
-            return TransferFeatureContainer(store: store)
+            return TransferFeatureContainer(store: store, logger: logger)
         }
     }
 
@@ -140,11 +246,39 @@ public final class TransferFeatureContainer {
         let store = TransferFeatureStore(
             runtime: NoopTransferRuntime(),
             settingsPersistence: NoopSettingsPersistence(snapshot: snapshot),
-            snapshot: snapshot
+            snapshot: snapshot,
+            logger: .disabled()
         )
         store.runtimeStatusText = "Discoverable"
         store.isRuntimeAvailable = true
-        return TransferFeatureContainer(store: store)
+        return TransferFeatureContainer(store: store, logger: .disabled())
+    }
+
+    private static func makeLogger(baseDirectory: URL) -> AppLogger {
+        let launchID = UUID().uuidString.lowercased()
+        let logsDirectory = baseDirectory.appendingPathComponent("Logs", isDirectory: true)
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
+        let environment = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil ? "development" : "test"
+        let resource: [AppLogAttribute] = [
+            .string("service.name", "LocalDrop"),
+            .string("service.namespace", "com.localdrop"),
+            .string("service.version", version),
+            .string("deployment.environment", environment),
+            .string("host.name", Host.current().localizedName ?? "unknown"),
+            .string("host.arch", ProcessInfo.processInfo.machineHardwareName),
+            .string("os.type", ProcessInfo.processInfo.operatingSystemVersionString),
+            .int("process.pid", Int(ProcessInfo.processInfo.processIdentifier)),
+            .string("app.launch_id", launchID)
+        ]
+
+        return AppLogger(
+            configuration: AppLoggerConfiguration(minimumLevel: .info, redactSensitiveValues: true),
+            resource: resource,
+            sinks: [
+                OSLogSink(subsystem: "com.localdrop.LocalDrop", category: "telemetry"),
+                JSONLFileSink(fileURL: logsDirectory.appendingPathComponent("localdrop.jsonl"))
+            ]
+        )
     }
 
     private static func applicationSupportDirectory(fileManager: FileManager) -> URL {
@@ -156,6 +290,50 @@ public final class TransferFeatureContainer {
     private static func defaultSaveLocation(fileManager: FileManager) -> URL {
         fileManager.urls(for: .downloadsDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Downloads", isDirectory: true)
+    }
+
+    private static func outboundTextDirectory(fileManager: FileManager) -> URL {
+        applicationSupportDirectory(fileManager: fileManager)
+            .appendingPathComponent("OutgoingText", isDirectory: true)
+    }
+
+    private static func generatedTextFilename() -> String {
+        "LocalDrop Text \(UUID().uuidString.lowercased()).txt"
+    }
+
+    private func recordTextStagingFailure(
+        message: String,
+        event: String,
+        error: (any Error)? = nil
+    ) {
+        logger.emit(
+            level: .error,
+            event: event,
+            scope: "TransferFeatureContainer",
+            attributes: [
+                .string("result", "failure"),
+                .string("error.message", error?.localizedDescription ?? message)
+            ]
+        )
+        store.lastErrorMessage = error?.localizedDescription ?? message
+        store.feedback = TransferFeedback(
+            message: message,
+            symbol: "exclamationmark.triangle.fill",
+            tone: .destructive
+        )
+        store.screen = .send
+    }
+}
+
+public enum ClipboardTextStagingResult: Equatable {
+    case staged
+    case requiresTextEntry
+    case failed
+}
+
+private extension ProcessInfo {
+    var machineHardwareName: String {
+        ProcessInfo.processInfo.environment["SIMULATOR_MODEL_IDENTIFIER"] ?? Host.current().name ?? "unknown"
     }
 }
 

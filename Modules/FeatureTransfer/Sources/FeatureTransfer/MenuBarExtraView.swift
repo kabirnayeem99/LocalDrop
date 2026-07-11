@@ -3,6 +3,7 @@ import SwiftUI
 public struct TransferMenuActions {
     let sendFiles: @MainActor () -> Void
     let sendFolders: @MainActor () -> Void
+    let sendTextOrClipboard: @MainActor () -> Void
     let openLocalDrop: @MainActor () -> Void
     let openPreferences: @MainActor () -> Void
     let quit: @MainActor () -> Void
@@ -10,12 +11,14 @@ public struct TransferMenuActions {
     public init(
         sendFiles: @escaping @MainActor () -> Void,
         sendFolders: @escaping @MainActor () -> Void,
+        sendTextOrClipboard: @escaping @MainActor () -> Void,
         openLocalDrop: @escaping @MainActor () -> Void,
         openPreferences: @escaping @MainActor () -> Void,
         quit: @escaping @MainActor () -> Void
     ) {
         self.sendFiles = sendFiles
         self.sendFolders = sendFolders
+        self.sendTextOrClipboard = sendTextOrClipboard
         self.openLocalDrop = openLocalDrop
         self.openPreferences = openPreferences
         self.quit = quit
@@ -54,8 +57,9 @@ struct TransferMenuBarExtraView: View {
             actions.sendFolders()
         }
 
-        Button("Send Text / Clipboard…") {}
-            .disabled(true)
+        Button("Send Text / Clipboard…") {
+            actions.sendTextOrClipboard()
+        }
 
         Divider()
 

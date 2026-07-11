@@ -8,14 +8,15 @@ let package = Package(
         .library(name: "FeatureTransfer", targets: ["FeatureTransfer"])
     ],
     dependencies: [
+        .package(path: "../AppLogging"),
         .package(path: "../LocalSendKit"),
         .package(path: "../DesignSystem")
     ],
     targets: [
         .target(
             name: "FeatureTransfer",
-            dependencies: ["LocalSendKit", "DesignSystem"]
+            dependencies: ["AppLogging", "LocalSendKit", "DesignSystem"]
         ),
-        .testTarget(name: "FeatureTransferTests", dependencies: ["FeatureTransfer"])
+        .testTarget(name: "FeatureTransferTests", dependencies: ["FeatureTransfer", "AppLogging"])
     ]
 )

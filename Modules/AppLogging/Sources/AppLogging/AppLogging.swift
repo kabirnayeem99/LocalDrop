@@ -411,18 +411,22 @@ public actor JSONLFileSink: AppLogFlushableSink {
     private let encoder = JSONEncoder()
     private let rotation: RotationConfiguration
     private let flushThreshold: Int
+    private let flushIntervalNanoseconds: UInt64
     private var pendingLines: [Data] = []
+    private var scheduledFlushTask: Task<Void, Never>?
 
     public init(
         fileURL: URL,
         fileManager: FileManager = .default,
         rotation: RotationConfiguration = RotationConfiguration(),
-        flushThreshold: Int = 32
+        flushThreshold: Int = 32,
+        flushIntervalNanoseconds: UInt64 = 500_000_000
     ) {
         self.fileURL = fileURL
         self.fileManager = fileManager
         self.rotation = rotation
         self.flushThreshold = max(flushThreshold, 1)
+        self.flushIntervalNanoseconds = flushIntervalNanoseconds
     }
 
     public func write(records: [AppLogRecord]) async throws {
@@ -430,6 +434,7 @@ public actor JSONLFileSink: AppLogFlushableSink {
             let encoded = try encoder.encode(record) + Data([0x0A])
             pendingLines.append(encoded)
         }
+        scheduleFlushIfNeeded()
         if pendingLines.count >= flushThreshold {
             try flushPendingLines()
         }
@@ -447,6 +452,8 @@ public actor JSONLFileSink: AppLogFlushableSink {
         guard pendingLines.isEmpty == false else {
             return
         }
+        scheduledFlushTask?.cancel()
+        scheduledFlushTask = nil
 
         try fileManager.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try rotateIfNeeded(for: pendingLines.reduce(0) { $0 + $1.count })
@@ -460,6 +467,20 @@ public actor JSONLFileSink: AppLogFlushableSink {
             try data.write(to: fileURL)
         }
         pendingLines.removeAll(keepingCapacity: true)
+    }
+
+    private func scheduleFlushIfNeeded() {
+        guard flushIntervalNanoseconds > 0, scheduledFlushTask == nil else {
+            return
+        }
+        let interval = self.flushIntervalNanoseconds
+        scheduledFlushTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: interval)
+            guard Task.isCancelled == false else {
+                return
+            }
+            try? await self?.flush()
+        }
     }
 
     private func rotateIfNeeded(for appendedBytes: Int) throws {

@@ -133,6 +133,27 @@ final class AppLoggingTests: XCTestCase {
         XCTAssertTrue(latestString.contains("\"body\":\"three\""))
     }
 
+    func testJSONLFileSinkFlushesPendingRecordsOnTimer() async throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let fileURL = directory.appendingPathComponent("localdrop.log")
+        let sink = JSONLFileSink(
+            fileURL: fileURL,
+            flushThreshold: 10,
+            flushIntervalNanoseconds: 20_000_000
+        )
+
+        try await sink.write(records: [makeRecord(body: "timer")])
+        let pendingAfterWrite = await sink.pendingCount()
+        XCTAssertEqual(pendingAfterWrite, 1)
+        try await Task.sleep(nanoseconds: 80_000_000)
+
+        let pendingAfterTimer = await sink.pendingCount()
+        XCTAssertEqual(pendingAfterTimer, 0)
+        let fileData = try Data(contentsOf: fileURL)
+        let fileString = try XCTUnwrap(String(data: fileData, encoding: .utf8))
+        XCTAssertTrue(fileString.contains("\"body\":\"timer\""))
+    }
+
     func testDisabledLoggerUsesCriticalMinimumLevel() {
         XCTAssertFalse(AppLogger.disabled().isEnabled(.info))
         XCTAssertTrue(AppLogger.disabled().isEnabled(.critical))

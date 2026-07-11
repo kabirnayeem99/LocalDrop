@@ -1,3 +1,4 @@
+import AppLogging
 import Foundation
 
 public struct LocalSendServerConfiguration: Sendable {
@@ -10,6 +11,7 @@ public struct LocalSendServerConfiguration: Sendable {
     public var allowDownloads: Bool
     public var storageDirectory: URL
     public var stateObserver: (@Sendable (LocalSendServerStateSnapshot) async -> Void)?
+    public var logger: AppLogger
 
     public init(
         registerInfo: RegisterInfo,
@@ -20,7 +22,8 @@ public struct LocalSendServerConfiguration: Sendable {
         sharedFilesProvider: (@Sendable () async -> [String: LocalSharedFile])? = nil,
         allowDownloads: Bool = true,
         storageDirectory: URL,
-        stateObserver: (@Sendable (LocalSendServerStateSnapshot) async -> Void)? = nil
+        stateObserver: (@Sendable (LocalSendServerStateSnapshot) async -> Void)? = nil,
+        logger: AppLogger = .disabled()
     ) {
         self.registerInfo = registerInfo
         self.pin = pin
@@ -31,6 +34,7 @@ public struct LocalSendServerConfiguration: Sendable {
         self.allowDownloads = allowDownloads
         self.storageDirectory = storageDirectory
         self.stateObserver = stateObserver
+        self.logger = logger
     }
 }
 
@@ -63,6 +67,18 @@ public actor LocalSendServer {
         case (.get, "\(LocalSendKit.apiPrefix)/download"):
             return try await handleDownload(request)
         default:
+            configuration.logger.emit(
+                level: .warning,
+                event: "server.request.failed",
+                scope: "LocalSendServer",
+                context: requestContext(for: request),
+                attributes: [
+                    .string("result", "route_miss"),
+                    .string("http.request.method", request.method.rawValue),
+                    .string("url.path", request.path),
+                    .int("http.response.status_code", 404)
+                ]
+            )
             return .empty(statusCode: 404)
         }
     }
@@ -84,9 +100,11 @@ public actor LocalSendServer {
 
     private func handleRegister(_ request: HTTPRequest) async throws -> HTTPResponse {
         guard request.body.isEmpty == false else {
+            logRouteOutcome(event: "protocol.register.handled", request: request, statusCode: 400, result: "bad_request", level: .warning)
             return .empty(statusCode: 400)
         }
         _ = try decoder.decode(RegisterInfo.self, from: try request.body.loadData())
+        logRouteOutcome(event: "protocol.register.handled", request: request, statusCode: 200, result: "success", level: .debug)
         return try jsonResponse(configuration.registerInfo)
     }
 
@@ -99,12 +117,15 @@ public actor LocalSendServer {
         case .allowed:
             break
         case .unauthorized:
+            logRouteOutcome(event: "protocol.prepare_upload.unauthorized", request: request, statusCode: 401, result: "unauthorized", level: .notice)
             return .empty(statusCode: 401)
         case .rateLimited:
+            logRouteOutcome(event: "protocol.prepare_upload.rate_limited", request: request, statusCode: 429, result: "rate_limited", level: .notice)
             return .empty(statusCode: 429)
         }
 
         guard request.body.isEmpty == false else {
+            logRouteOutcome(event: "protocol.prepare_upload.rejected", request: request, statusCode: 400, result: "bad_request", level: .warning)
             return .empty(statusCode: 400)
         }
 
@@ -112,10 +133,12 @@ public actor LocalSendServer {
         do {
             payload = try decoder.decode(PrepareUploadRequest.self, from: try request.body.loadData())
         } catch {
+            logRouteOutcome(event: "protocol.prepare_upload.rejected", request: request, statusCode: 400, result: "decode_failed", level: .warning)
             return .empty(statusCode: 400)
         }
 
         if payload.files.isEmpty {
+            logRouteOutcome(event: "protocol.prepare_upload.rejected", request: request, statusCode: 400, result: "empty_files", level: .warning)
             return .empty(statusCode: 400)
         }
 
@@ -130,12 +153,26 @@ public actor LocalSendServer {
             tokenFactory: { _ in UUID().uuidString }
         ) {
         case .accepted(let response):
+            logRouteOutcome(
+                event: "protocol.prepare_upload.allowed",
+                request: request,
+                statusCode: 200,
+                result: "success",
+                level: .info,
+                attributes: [
+                    .string("transfer.session_id", response.sessionId),
+                    .int("transfer.accepted_file_count", response.files.count)
+                ]
+            )
             resolvedResponse = try jsonResponse(response)
         case .rejected:
+            logRouteOutcome(event: "protocol.prepare_upload.rejected", request: request, statusCode: 403, result: "rejected", level: .notice)
             resolvedResponse = .empty(statusCode: 403)
         case .blocked:
+            logRouteOutcome(event: "protocol.prepare_upload.rejected", request: request, statusCode: 409, result: "blocked", level: .warning)
             resolvedResponse = .empty(statusCode: 409)
         case .noTransferNeeded:
+            logRouteOutcome(event: "protocol.prepare_upload.rejected", request: request, statusCode: 204, result: "no_transfer_needed", level: .notice)
             resolvedResponse = .empty(statusCode: 204)
         }
         await notifyStateObserver()
@@ -154,12 +191,23 @@ public actor LocalSendServer {
         let response: HTTPResponse
         switch result {
         case .success:
+            logRouteOutcome(
+                event: "protocol.upload.accepted",
+                request: request,
+                statusCode: 200,
+                result: "success",
+                level: .info,
+                attributes: requestTransferIdentifiers(request)
+            )
             response = .empty(statusCode: 200)
         case .missingParameters:
+            logRouteOutcome(event: "protocol.upload.blocked", request: request, statusCode: 400, result: "missing_parameters", level: .warning)
             response = .empty(statusCode: 400)
         case .forbidden:
+            logRouteOutcome(event: "protocol.upload.blocked", request: request, statusCode: 403, result: "forbidden", level: .notice)
             response = .empty(statusCode: 403)
         case .blocked:
+            logRouteOutcome(event: "protocol.upload.blocked", request: request, statusCode: 409, result: "blocked", level: .warning)
             response = .empty(statusCode: 409)
         }
         await notifyStateObserver()
@@ -168,17 +216,21 @@ public actor LocalSendServer {
 
     private func handleCancel(_ request: HTTPRequest) async -> HTTPResponse {
         guard let sessionId = request.query["sessionId"], sessionId.isEmpty == false else {
+            logRouteOutcome(event: "protocol.cancel.handled", request: request, statusCode: 400, result: "missing_session", level: .warning)
             return .empty(statusCode: 400)
         }
 
         if await receiveSession.cancel(sessionId: sessionId, senderIP: request.remoteAddress) {
             await notifyStateObserver()
+            logRouteOutcome(event: "protocol.cancel.handled", request: request, statusCode: 200, result: "success", level: .info, attributes: [.string("transfer.session_id", sessionId)])
             return .empty(statusCode: 200)
         }
         if await sendSession.cancel(sessionId: sessionId, requesterIP: request.remoteAddress) {
             await notifyStateObserver()
+            logRouteOutcome(event: "protocol.cancel.handled", request: request, statusCode: 200, result: "success", level: .info, attributes: [.string("transfer.session_id", sessionId)])
             return .empty(statusCode: 200)
         }
+        logRouteOutcome(event: "protocol.cancel.handled", request: request, statusCode: 409, result: "blocked", level: .warning, attributes: [.string("transfer.session_id", sessionId)])
         return .empty(statusCode: 409)
     }
 
@@ -191,8 +243,10 @@ public actor LocalSendServer {
         case .allowed:
             break
         case .unauthorized:
+            logRouteOutcome(event: "protocol.prepare_download.rejected", request: request, statusCode: 401, result: "unauthorized", level: .notice)
             return .empty(statusCode: 401)
         case .rateLimited:
+            logRouteOutcome(event: "protocol.prepare_download.rejected", request: request, statusCode: 429, result: "rate_limited", level: .notice)
             return .empty(statusCode: 429)
         }
 
@@ -204,8 +258,17 @@ public actor LocalSendServer {
             allow: configuration.allowDownloads
         ) {
         case .accepted(let response):
+            logRouteOutcome(
+                event: "protocol.prepare_download.allowed",
+                request: request,
+                statusCode: 200,
+                result: "success",
+                level: .info,
+                attributes: [.string("transfer.session_id", response.sessionId)]
+            )
             resolvedResponse = try jsonResponse(response)
         case .rejected:
+            logRouteOutcome(event: "protocol.prepare_download.rejected", request: request, statusCode: 403, result: "rejected", level: .notice)
             resolvedResponse = .empty(statusCode: 403)
         }
         await notifyStateObserver()
@@ -220,6 +283,7 @@ public actor LocalSendServer {
                 fileId: fileId,
                 requesterIP: request.remoteAddress
               ) else {
+            logRouteOutcome(event: "protocol.download.rejected", request: request, statusCode: 403, result: "rejected", level: .notice)
             return .empty(statusCode: 403)
         }
 
@@ -233,6 +297,18 @@ public actor LocalSendServer {
             body: file.responseBody
         )
         await notifyStateObserver()
+        logRouteOutcome(
+            event: "protocol.download.allowed",
+            request: request,
+            statusCode: 200,
+            result: "success",
+            level: .info,
+            attributes: [
+                .string("transfer.session_id", sessionId),
+                .string("transfer.file_id", fileId),
+                .int64("http.response.body.size", response.contentLength)
+            ]
+        )
         return response
     }
 
@@ -255,5 +331,44 @@ public actor LocalSendServer {
                 sendSessions: await sendSession.snapshots()
             )
         )
+    }
+
+    private func logRouteOutcome(
+        event: String,
+        request: HTTPRequest,
+        statusCode: Int,
+        result: String,
+        level: AppLogLevel,
+        attributes: [AppLogAttribute] = []
+    ) {
+        configuration.logger.emit(
+            level: level,
+            event: event,
+            scope: "LocalSendServer",
+            context: requestContext(for: request),
+            attributes: [
+                .string("result", result),
+                .string("http.request.method", request.method.rawValue),
+                .string("url.path", request.path),
+                .int("http.response.status_code", statusCode)
+            ] + requestTransferIdentifiers(request) + attributes
+        )
+    }
+
+    private func requestContext(for request: HTTPRequest) -> AppLogContext {
+        AppLogContext(attributes: [
+            .string("client.address", request.remoteAddress)
+        ] + (request.connectionID.map { [.string("request.connection_id", $0)] } ?? []) + (request.requestID.map { [.string("request.request_id", $0)] } ?? []))
+    }
+
+    private func requestTransferIdentifiers(_ request: HTTPRequest) -> [AppLogAttribute] {
+        var attributes: [AppLogAttribute] = []
+        if let sessionID = request.query["sessionId"], sessionID.isEmpty == false {
+            attributes.append(.string("transfer.session_id", sessionID))
+        }
+        if let fileID = request.query["fileId"], fileID.isEmpty == false {
+            attributes.append(.string("transfer.file_id", fileID))
+        }
+        return attributes
     }
 }

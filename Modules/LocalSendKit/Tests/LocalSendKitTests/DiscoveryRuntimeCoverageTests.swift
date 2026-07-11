@@ -1,3 +1,4 @@
+import AppLogging
 import Foundation
 import Network
 import Testing
@@ -523,6 +524,59 @@ struct DiscoveryRuntimeCoverageTests {
             await listenerPeerBox.get()
         }
         #expect(peer?.info.fingerprint == "DELEGATED-FP")
+    }
+
+    @Test func discoveryServiceEmitsStructuredPeerLifecycleLogs() async throws {
+        let port = makeTestPort()
+        let sink = RecordingLogSink()
+        let logger = AppLogger(
+            configuration: AppLoggerConfiguration(minimumLevel: .debug, redactSensitiveValues: true),
+            sinks: [sink]
+        )
+        let listener = try MulticastListenerRuntime(
+            multicastHost: Self.testMulticastGroup,
+            port: port,
+            selfFingerprint: "LOG-SELF",
+            logger: logger
+        ) { _ in }
+        let announcer = try MulticastAnnouncerRuntime(
+            multicastHost: Self.testMulticastGroup,
+            port: port,
+            logger: logger
+        )
+
+        let service = DiscoveryService(
+            listener: listener,
+            announcer: announcer,
+            registerResponder: { _ in true },
+            logger: logger
+        )
+        service.start()
+        defer { service.stop() }
+
+        await service.handle(
+            peer: DiscoveredPeer(
+                host: "127.0.0.1",
+                info: RegisterInfo(alias: "Peer A", fingerprint: "PEER-A", port: 53317, protocolType: .https),
+                shouldReplyViaRegister: false
+            ),
+            localInfo: RegisterInfo(alias: "Local", fingerprint: "LOCAL")
+        )
+        await service.handle(
+            peer: DiscoveredPeer(
+                host: "127.0.0.2",
+                info: RegisterInfo(alias: "Peer A Updated", fingerprint: "PEER-A", port: 53317, protocolType: .https),
+                shouldReplyViaRegister: false
+            ),
+            localInfo: RegisterInfo(alias: "Local", fingerprint: "LOCAL")
+        )
+
+        try await Task.sleep(for: .milliseconds(50))
+        await logger.flush()
+        let records = await sink.records()
+        #expect(records.contains(where: { $0.attributes["event.name"] == .string("discovery.peer.discovered") }))
+        #expect(records.contains(where: { $0.attributes["event.name"] == .string("discovery.peer.updated") }))
+        #expect(records.contains(where: { $0.attributes["event.name"] == .string("discovery.peer.snapshot") }))
     }
 
     @Test func multicastListenerRuntimeInitThrowsForInvalidHost() {

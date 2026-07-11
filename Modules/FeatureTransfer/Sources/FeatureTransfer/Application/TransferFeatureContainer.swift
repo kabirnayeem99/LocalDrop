@@ -35,6 +35,7 @@ public final class TransferFeatureContainer {
     }
 
     public func stop() async {
+        logger.emit(level: .info, event: "app.runtime.stop.requested", scope: "TransferFeatureContainer")
         await store.stop()
         await logger.flush()
     }
@@ -140,12 +141,46 @@ public final class TransferFeatureContainer {
         store.lastErrorMessage = error.localizedDescription
     }
 
+    public func recordLaunchStarted(mode: String) {
+        logger.emit(
+            level: .info,
+            event: "app.launch.started",
+            scope: "TransferFeatureContainer",
+            attributes: [
+                .string("app.launch.mode", mode),
+                .string("app.component", "LocalDropApp")
+            ]
+        )
+    }
+
+    public func recordImporterPresented(kind: String) {
+        logger.emit(
+            level: .debug,
+            event: "app.import.files.selected",
+            scope: "TransferFeatureContainer",
+            attributes: [
+                .string("event.action", "picker_presented"),
+                .string("app.import.kind", kind)
+            ]
+        )
+    }
+
+    public func recordTerminationRequested() {
+        logger.emit(
+            level: .info,
+            event: "app.runtime.stop.requested",
+            scope: "TransferFeatureContainer",
+            attributes: [.string("app.component", "LocalDropApp")]
+        )
+    }
+
     public static func live(
         userDefaults: UserDefaults = .standard,
         fileManager: FileManager = .default
     ) -> TransferFeatureContainer {
         let baseDirectory = applicationSupportDirectory(fileManager: fileManager)
         let logger = makeLogger(baseDirectory: baseDirectory)
+        logger.emit(level: .info, event: "app.launch.started", scope: "TransferFeatureContainer")
         let saveLocation = defaultSaveLocation(fileManager: fileManager)
         let deviceName = Host.current().localizedName ?? "LocalDrop Mac"
         let defaultSnapshot = TransferSettingsSnapshot.default(deviceName: deviceName, saveLocation: saveLocation)
@@ -162,7 +197,8 @@ public final class TransferFeatureContainer {
             attributes: [
                 .string("app.component", "TransferFeatureContainer"),
                 .bool("settings.use_https", snapshot.protocolSettings.useHTTPS),
-                .bool("settings.allow_downloads", snapshot.protocolSettings.allowDownloads)
+                .bool("settings.allow_downloads", snapshot.protocolSettings.allowDownloads),
+                .string("settings.save_location.last_path_component", snapshot.protocolSettings.saveLocation.lastPathComponent)
             ]
         )
 
@@ -192,7 +228,8 @@ public final class TransferFeatureContainer {
                 )
                 let node = try LocalSendNode(
                     runtimeConfiguration: runtimeConfiguration,
-                    certificateStore: certificateStore
+                    certificateStore: certificateStore,
+                    logger: logger
                 )
                 return LiveRuntimeComponents(node: node, registerInfo: registerInfo)
             }
@@ -258,7 +295,15 @@ public final class TransferFeatureContainer {
         let launchID = UUID().uuidString.lowercased()
         let logsDirectory = baseDirectory.appendingPathComponent("Logs", isDirectory: true)
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
-        let environment = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil ? "development" : "test"
+        let environment: String
+        let minimumLevel: AppLogLevel
+        #if DEBUG
+        minimumLevel = .debug
+        environment = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil ? "development" : "test"
+        #else
+        minimumLevel = .info
+        environment = "production"
+        #endif
         let resource: [AppLogAttribute] = [
             .string("service.name", "LocalDrop"),
             .string("service.namespace", "com.localdrop"),
@@ -272,7 +317,7 @@ public final class TransferFeatureContainer {
         ]
 
         return AppLogger(
-            configuration: AppLoggerConfiguration(minimumLevel: .info, redactSensitiveValues: true),
+            configuration: AppLoggerConfiguration(minimumLevel: minimumLevel, redactSensitiveValues: true),
             resource: resource,
             sinks: [
                 OSLogSink(subsystem: "com.localdrop.LocalDrop", category: "telemetry"),

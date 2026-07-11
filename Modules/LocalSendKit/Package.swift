@@ -8,6 +8,7 @@ let package = Package(
         .library(name: "LocalSendKit", targets: ["LocalSendKit"])
     ],
     dependencies: [
+        .package(path: "../AppLogging"),
         .package(url: "https://github.com/apple/swift-certificates.git", from: "1.6.0"),
         .package(url: "https://github.com/apple/swift-crypto.git", from: "3.3.0")
     ],
@@ -15,10 +16,11 @@ let package = Package(
         .target(
             name: "LocalSendKit",
             dependencies: [
+                "AppLogging",
                 .product(name: "X509", package: "swift-certificates"),
                 .product(name: "Crypto", package: "swift-crypto")
             ]
         ),
-        .testTarget(name: "LocalSendKitTests", dependencies: ["LocalSendKit"])
+        .testTarget(name: "LocalSendKitTests", dependencies: ["LocalSendKit", "AppLogging"])
     ]
 )

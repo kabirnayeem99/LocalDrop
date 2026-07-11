@@ -28,6 +28,7 @@ struct LocalDropApp: App {
         } else {
             initialContainer = .live()
         }
+        initialContainer.recordLaunchStarted(mode: isUITesting ? "ui_testing" : "standard")
 
         _container = State(
             initialValue: initialContainer
@@ -150,10 +151,12 @@ struct LocalDropApp: App {
     }
 
     private func showFileImporter() {
+        container.recordImporterPresented(kind: "file")
         isFileImporterPresented = true
     }
 
     private func showFolderImporter() {
+        container.recordImporterPresented(kind: "folder")
         isFolderImporterPresented = true
     }
 
@@ -192,6 +195,7 @@ struct LocalDropApp: App {
     }
 
     private func terminate() {
+        container.recordTerminationRequested()
         Task {
             await container.stop()
             exit(EXIT_SUCCESS)

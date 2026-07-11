@@ -45,6 +45,7 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
             attributes: [.bool("settings.use_https", currentSettings.useHTTPS)]
         )
         try await components.node.start()
+        logger.emit(level: .debug, event: "app.runtime.start.succeeded", scope: "LocalSendRuntimeAdapter", context: runtimeContext(), attributes: [.string("event.action", "node_started")])
         bindNodeObservers()
         try await components.node.announce()
         logger.emit(
@@ -59,6 +60,7 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
     func stop() async {
         stateObservationTask?.cancel()
         incomingObservationTask?.cancel()
+        logger.emit(level: .debug, event: "app.runtime.stop.requested", scope: "LocalSendRuntimeAdapter", context: runtimeContext(), attributes: [.string("event.action", "stream_teardown")])
         stateObservationTask = nil
         incomingObservationTask = nil
         activeSendSession = nil
@@ -181,7 +183,25 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
             attributes: [.int("transfer.file_count", files.count)]
         )
 
-        guard let prepareResponse = try await client.prepareUpload(request, pin: pin) else {
+        let prepareResponse: PrepareUploadResponse?
+        do {
+            prepareResponse = try await client.prepareUpload(request, pin: pin)
+        } catch {
+            logger.emit(
+                level: .error,
+                event: "transfer.send.file_upload.failed",
+                scope: "LocalSendRuntimeAdapter",
+                context: context,
+                attributes: [
+                    .string("result", "prepare_upload_failed"),
+                    .string("error.message", error.localizedDescription),
+                    .string("error.type", String(describing: type(of: error)))
+                ]
+            )
+            throw error
+        }
+
+        guard let prepareResponse else {
             await progressBroadcaster.finishCurrentValue()
             logger.emit(
                 level: .warning,
@@ -239,13 +259,30 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
                     .int64("transfer.byte_count", byteCount)
                 ]
             )
-            try await client.upload(
-                fileAt: item.fileURL,
-                byteCount: byteCount,
-                sessionId: prepareResponse.sessionId,
-                fileId: item.id,
-                token: token
-            )
+            do {
+                try await client.upload(
+                    fileAt: item.fileURL,
+                    byteCount: byteCount,
+                    sessionId: prepareResponse.sessionId,
+                    fileId: item.id,
+                    token: token
+                )
+            } catch {
+                logger.emit(
+                    level: .error,
+                    event: "transfer.send.file_upload.failed",
+                    scope: "LocalSendRuntimeAdapter",
+                    context: sendContext(sessionID: prepareResponse.sessionId, peer: peer, traceID: traceID),
+                    attributes: [
+                        .string("transfer.file_id", item.id),
+                        .string("transfer.file_name", item.name),
+                        .int64("transfer.byte_count", byteCount),
+                        .string("error.message", error.localizedDescription),
+                        .string("error.type", String(describing: type(of: error)))
+                    ]
+                )
+                throw error
+            }
             logger.emit(
                 level: .info,
                 event: "transfer.send.file_upload.completed",
@@ -322,6 +359,7 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
         incomingObservationTask?.cancel()
 
         stateObservationTask = Task {
+            logger.emit(level: .debug, event: "discovery.peer.snapshot", scope: "LocalSendRuntimeAdapter", context: runtimeContext(), attributes: [.string("event.action", "stream_started")])
             let runtimeStream = await components.node.observeRuntime()
             for await snapshot in runtimeStream {
                 let peerItems = snapshot.discoveredPeers.map(NearbyPeerItem.init(peer:))
@@ -384,9 +422,11 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
                     }
                 }
             }
+            logger.emit(level: .debug, event: "discovery.peer.snapshot", scope: "LocalSendRuntimeAdapter", context: runtimeContext(), attributes: [.string("event.action", "stream_finished")])
         }
 
         incomingObservationTask = Task {
+            logger.emit(level: .debug, event: "transfer.incoming.request_bridge_finished", scope: "LocalSendRuntimeAdapter", context: runtimeContext(), attributes: [.string("event.action", "stream_started")])
             let requestStream = await components.node.incomingTransferRequests()
             for await request in requestStream {
                 let mappedFiles = request.files.values.sorted { $0.fileName < $1.fileName }.map { file in
@@ -422,6 +462,7 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
                     ]
                 )
             }
+            logger.emit(level: .debug, event: "transfer.incoming.request_bridge_finished", scope: "LocalSendRuntimeAdapter", context: runtimeContext(), attributes: [.string("event.action", "stream_finished")])
         }
     }
 

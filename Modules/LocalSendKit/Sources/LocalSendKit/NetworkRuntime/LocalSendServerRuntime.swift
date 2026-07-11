@@ -1,3 +1,4 @@
+import AppLogging
 import Foundation
 import Network
 
@@ -30,6 +31,7 @@ public final actor LocalSendServerRuntime {
     private let port: UInt16
     private let limits: LocalSendRuntimeLimits
     private let temporaryDirectory: URL
+    private let logger: AppLogger
     private var listener: NWListener?
     private var boundEndpoint: BoundEndpoint?
     private var readyContinuation: CheckedContinuation<BoundEndpoint, Error>?
@@ -41,7 +43,8 @@ public final actor LocalSendServerRuntime {
         protocolType: ProtocolType = .https,
         port: UInt16,
         limits: LocalSendRuntimeLimits = .init(),
-        temporaryDirectory: URL
+        temporaryDirectory: URL,
+        logger: AppLogger = .disabled()
     ) {
         self.server = server
         self.tlsConfiguration = tlsConfiguration
@@ -49,10 +52,20 @@ public final actor LocalSendServerRuntime {
         self.port = port
         self.limits = limits
         self.temporaryDirectory = temporaryDirectory
+        self.logger = logger
     }
 
     public func start() async throws {
         guard listener == nil else { return }
+        logger.emit(
+            level: .info,
+            event: "server.listener.starting",
+            scope: "LocalSendServerRuntime",
+            attributes: [
+                .string("localsend.protocol_type", protocolType.rawValue),
+                .int("server.port", Int(port))
+            ]
+        )
         let listener: NWListener
         let parameters = try makeListenerParameters()
         if let requestedPort = NWEndpoint.Port(rawValue: port), port != 0 {
@@ -93,6 +106,7 @@ public final actor LocalSendServerRuntime {
             task.cancel()
         }
         activeConnectionTasks.removeAll()
+        logger.emit(level: .info, event: "server.listener.stopped", scope: "LocalSendServerRuntime")
     }
 
     private func handle(state: NWListener.State, listener: NWListener) {
@@ -100,9 +114,24 @@ public final actor LocalSendServerRuntime {
         case .ready:
             let endpoint = resolvedEndpoint(from: listener)
             boundEndpoint = endpoint
+            logger.emit(
+                level: .info,
+                event: "server.listener.ready",
+                scope: "LocalSendServerRuntime",
+                attributes: [
+                    .string("server.address", endpoint.host),
+                    .int("server.port", endpoint.port),
+                    .string("localsend.protocol_type", endpoint.protocolType.rawValue)
+                ]
+            )
             readyContinuation?.resume(returning: endpoint)
             readyContinuation = nil
         case .failed:
+            logger.emit(
+                level: .error,
+                event: "server.listener.failed",
+                scope: "LocalSendServerRuntime"
+            )
             readyContinuation?.resume(throwing: LocalSendRuntimeError.listenerStartFailed)
             readyContinuation = nil
         default:
@@ -112,9 +141,17 @@ public final actor LocalSendServerRuntime {
 
     private func accept(connection: NWConnection) {
         let identifier = UUID()
+        let connectionID = identifier.uuidString.lowercased()
+        let remoteAddress = Self.remoteAddress(from: connection.endpoint)
+        logger.emit(
+            level: .debug,
+            event: "server.connection.accepted",
+            scope: "LocalSendServerRuntime",
+            context: connectionContext(connectionID: connectionID, remoteAddress: remoteAddress)
+        )
         let task = Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else { return }
-            await self.run(connection: connection)
+            await self.run(connection: connection, connectionID: connectionID, remoteAddress: remoteAddress)
             await self.finishConnection(id: identifier)
         }
         activeConnectionTasks[identifier] = task
@@ -125,22 +162,58 @@ public final actor LocalSendServerRuntime {
         activeConnectionTasks.removeValue(forKey: id)
     }
 
-    private func run(connection: NWConnection) async {
+    private func run(connection: NWConnection, connectionID: String, remoteAddress: String) async {
+        var closeReason = "completed"
         do {
-            try await serveNextRequest(on: connection)
+            try await serveNextRequest(on: connection, connectionID: connectionID, remoteAddress: remoteAddress)
         } catch {
+            closeReason = "failed"
+            logger.emit(
+                level: .error,
+                event: "server.request.failed",
+                scope: "LocalSendServerRuntime",
+                context: connectionContext(connectionID: connectionID, remoteAddress: remoteAddress),
+                attributes: [
+                    .string("result", "failure"),
+                    .string("error.message", error.localizedDescription),
+                    .string("error.type", String(describing: type(of: error)))
+                ]
+            )
             _ = try? await send(response: .empty(statusCode: 500), on: connection)
         }
         connection.cancel()
+        logger.emit(
+            level: .debug,
+            event: "server.connection.closed",
+            scope: "LocalSendServerRuntime",
+            context: connectionContext(connectionID: connectionID, remoteAddress: remoteAddress),
+            attributes: [.string("result", closeReason)]
+        )
     }
 
-    private func serveNextRequest(on connection: NWConnection) async throws {
-        let remoteAddress = Self.remoteAddress(from: connection.endpoint)
-        let (request, leftover) = try await readRequest(on: connection, remoteAddress: remoteAddress, initialBuffer: Data())
+    private func serveNextRequest(on connection: NWConnection, connectionID: String, remoteAddress: String) async throws {
+        let (request, leftover) = try await readRequest(
+            on: connection,
+            connectionID: connectionID,
+            remoteAddress: remoteAddress,
+            initialBuffer: Data()
+        )
         let response = try await server.handle(request)
         try await send(response: response, on: connection)
         if request.wantsKeepAlive {
-            let (followup, _) = try await readRequest(on: connection, remoteAddress: remoteAddress, initialBuffer: leftover)
+            logger.emit(
+                level: .debug,
+                event: "server.request.received",
+                scope: "LocalSendServerRuntime",
+                context: requestContext(for: request),
+                attributes: [.string("event.action", "keep_alive_followup")]
+            )
+            let (followup, _) = try await readRequest(
+                on: connection,
+                connectionID: connectionID,
+                remoteAddress: remoteAddress,
+                initialBuffer: leftover
+            )
             let followupResponse = try await server.handle(followup)
             try await send(response: followupResponse, on: connection)
         }
@@ -152,7 +225,13 @@ public final actor LocalSendServerRuntime {
     /// clients (or a TLS/TCP stack that coalesces multiple requests into one `receive()`) can
     /// deliver bytes belonging to a follow-up request in the same read as this request's body,
     /// and those bytes must be carried forward rather than silently truncated/discarded.
-    private func readRequest(on connection: NWConnection, remoteAddress: String, initialBuffer: Data) async throws -> (HTTPRequest, Data) {
+    private func readRequest(on connection: NWConnection, connectionID: String, remoteAddress: String, initialBuffer: Data) async throws -> (HTTPRequest, Data) {
+        logger.emit(
+            level: .debug,
+            event: "server.request.received",
+            scope: "LocalSendServerRuntime",
+            context: connectionContext(connectionID: connectionID, remoteAddress: remoteAddress)
+        )
         var buffer = initialBuffer
         var head: HTTPRequestHead?
 
@@ -168,6 +247,16 @@ public final actor LocalSendServerRuntime {
                 break
             }
             if buffer.count > limits.maximumHeaderBytes {
+                logger.emit(
+                    level: .warning,
+                    event: "server.request.failed",
+                    scope: "LocalSendServerRuntime",
+                    context: connectionContext(connectionID: connectionID, remoteAddress: remoteAddress),
+                    attributes: [
+                        .string("result", "headers_too_large"),
+                        .int("http.request.body.size", buffer.count)
+                    ]
+                )
                 throw HTTPParserError.headersTooLarge
             }
             let chunk = try await receive(on: connection)
@@ -178,9 +267,25 @@ public final actor LocalSendServerRuntime {
         }
 
         let parsedHead = head!
+        let requestID = UUID().uuidString.lowercased()
         let bodyStart = parsedHead.headerByteCount
         let routeIsUpload = parsedHead.path == "\(LocalSendKit.apiPrefix)/upload"
         if routeIsUpload == false, parsedHead.contentLength > Int64(limits.maximumJSONBodyBytes) {
+            logger.emit(
+                level: .warning,
+                event: "server.request.failed",
+                scope: "LocalSendServerRuntime",
+                context: AppLogContext(
+                    attributes: connectionContext(connectionID: connectionID, remoteAddress: remoteAddress).attributes + [
+                        .string("request.request_id", requestID),
+                        .string("url.path", parsedHead.path)
+                    ]
+                ),
+                attributes: [
+                    .string("result", "body_too_large"),
+                    .int64("http.request.body.size", parsedHead.contentLength)
+                ]
+            )
             throw LocalSendRuntimeError.bodyTooLarge
         }
 
@@ -211,7 +316,20 @@ public final actor LocalSendServerRuntime {
             query: parsedHead.query,
             headers: parsedHead.headers,
             body: requestBody,
-            remoteAddress: remoteAddress
+            remoteAddress: remoteAddress,
+            requestID: requestID,
+            connectionID: connectionID
+        )
+        logger.emit(
+            level: .debug,
+            event: "server.request.parsed",
+            scope: "LocalSendServerRuntime",
+            context: requestContext(for: request),
+            attributes: [
+                .string("http.request.method", request.method.rawValue),
+                .string("url.path", request.path),
+                .int64("http.request.body.size", request.body.byteCount)
+            ]
         )
         return (request, leftover)
     }
@@ -239,6 +357,15 @@ public final actor LocalSendServerRuntime {
             throw LocalSendRuntimeError.connectionReadFailed
         }
         defer { try? handle.close() }
+        logger.emit(
+            level: .debug,
+            event: "server.body.staged_to_disk",
+            scope: "LocalSendServerRuntime",
+            attributes: [
+                .string("result", "started"),
+                .int64("http.request.body.size", expectedLength)
+            ]
+        )
 
         var bytesWritten = Int64(0)
         var leftover = Data()
@@ -268,6 +395,15 @@ public final actor LocalSendServerRuntime {
         guard bytesWritten == expectedLength else {
             throw HTTPParserError.incompleteBody
         }
+        logger.emit(
+            level: .debug,
+            event: "server.body.staged_to_disk",
+            scope: "LocalSendServerRuntime",
+            attributes: [
+                .string("result", "success"),
+                .int64("http.request.body.size", expectedLength)
+            ]
+        )
         return (.file(fileURL, byteCount: expectedLength), leftover)
     }
 
@@ -286,6 +422,15 @@ public final actor LocalSendServerRuntime {
                 try await send(data: chunk, on: connection)
             }
         }
+        logger.emit(
+            level: .debug,
+            event: "server.response.sent",
+            scope: "LocalSendServerRuntime",
+            attributes: [
+                .int("http.response.status_code", response.statusCode),
+                .int64("http.response.body.size", response.body.byteCount)
+            ]
+        )
     }
 
     private func receive(on connection: NWConnection) async throws -> Data {
@@ -353,5 +498,18 @@ public final actor LocalSendServerRuntime {
         @unknown default:
             return "127.0.0.1"
         }
+    }
+
+    private func connectionContext(connectionID: String, remoteAddress: String) -> AppLogContext {
+        AppLogContext(attributes: [
+            .string("request.connection_id", connectionID),
+            .string("client.address", remoteAddress)
+        ])
+    }
+
+    private func requestContext(for request: HTTPRequest) -> AppLogContext {
+        AppLogContext(attributes: [
+            .string("client.address", request.remoteAddress)
+        ] + (request.connectionID.map { [.string("request.connection_id", $0)] } ?? []) + (request.requestID.map { [.string("request.request_id", $0)] } ?? []))
     }
 }

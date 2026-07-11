@@ -1,3 +1,4 @@
+import AppLogging
 import Foundation
 
 public struct LocalSendRuntimeConfiguration: Sendable {
@@ -70,15 +71,18 @@ public final class LocalSendNode: @unchecked Sendable {
     private let serverRuntime: LocalSendServerRuntime
     private let discoveryService: DiscoveryService
     private let runtimeStateStore: LocalSendRuntimeStateStore
+    private let logger: AppLogger
 
     public init(
         runtimeConfiguration: LocalSendRuntimeConfiguration,
         certificateStore: any CertificateStore,
-        clientFactory: LocalSendClientFactory = .init()
+        clientFactory: LocalSendClientFactory = .init(),
+        logger: AppLogger = .disabled()
     ) throws {
         self.runtimeConfiguration = runtimeConfiguration
         self.certificateAuthority = CertificateAuthority(store: certificateStore)
         self.clientFactory = clientFactory
+        self.logger = logger
         self.localIdentity = try certificateAuthority.loadOrCreateIdentity()
         let runtimeStateStore = LocalSendRuntimeStateStore()
         self.runtimeStateStore = runtimeStateStore
@@ -106,7 +110,8 @@ public final class LocalSendNode: @unchecked Sendable {
                         state.sendSessions = snapshot.sendSessions
                         state.pendingIncomingRequest = pendingRequest
                     }
-                }
+                },
+                logger: logger
             )
         )
         self.serverRuntime = LocalSendServerRuntime(
@@ -115,7 +120,8 @@ public final class LocalSendNode: @unchecked Sendable {
             protocolType: runtimeConfiguration.protocolType,
             port: runtimeConfiguration.tcpPort,
             limits: runtimeConfiguration.limits,
-            temporaryDirectory: runtimeConfiguration.storageDirectory
+            temporaryDirectory: runtimeConfiguration.storageDirectory,
+            logger: logger
         )
 
         let callbackBox = DiscoveryCallbackBox()
@@ -123,13 +129,15 @@ public final class LocalSendNode: @unchecked Sendable {
             listener: try MulticastListenerRuntime(
                 multicastHost: runtimeConfiguration.multicastHost,
                 port: runtimeConfiguration.multicastPort,
-                selfFingerprint: runtimeConfiguration.registerInfo.fingerprint
+                selfFingerprint: runtimeConfiguration.registerInfo.fingerprint,
+                logger: logger
             ) { peer in
                 Task { await callbackBox.service?.handle(peer: peer, localInfo: runtimeConfiguration.registerInfo) }
             },
             announcer: try MulticastAnnouncerRuntime(
                 multicastHost: runtimeConfiguration.multicastHost,
-                port: runtimeConfiguration.multicastPort
+                port: runtimeConfiguration.multicastPort,
+                logger: logger
             ),
             registerResponder: { _ in
                 false
@@ -138,13 +146,15 @@ public final class LocalSendNode: @unchecked Sendable {
                 await runtimeStateStore.update { state in
                     state.discoveredPeers = peers
                 }
-            }
+            },
+            logger: logger
         )
         callbackBox.service = discoveryService
         self.discoveryService = discoveryService
     }
 
     public func start() async throws {
+        logger.emit(level: .info, event: "app.runtime.start.requested", scope: "LocalSendNode")
         await runtimeStateStore.update { $0.lifecycle = .starting }
         try await serverRuntime.start()
         let endpoint = try await serverRuntime.waitUntilReady()
@@ -158,9 +168,20 @@ public final class LocalSendNode: @unchecked Sendable {
             )
         }
         discoveryService.start()
+        logger.emit(
+            level: .info,
+            event: "app.runtime.start.succeeded",
+            scope: "LocalSendNode",
+            attributes: [
+                .string("server.address", endpoint.host),
+                .int("server.port", endpoint.port),
+                .string("localsend.protocol_type", endpoint.protocolType.rawValue)
+            ]
+        )
     }
 
     public func stop() async {
+        logger.emit(level: .info, event: "app.runtime.stop.requested", scope: "LocalSendNode")
         await runtimeStateStore.update { $0.lifecycle = .stopping }
         if let incomingRequestBridge = runtimeConfiguration.incomingRequestBridge {
             await incomingRequestBridge.finishPending()
@@ -171,6 +192,7 @@ public final class LocalSendNode: @unchecked Sendable {
             $0.lifecycle = .stopped
             $0.pendingIncomingRequest = nil
         }
+        logger.emit(level: .info, event: "app.runtime.stop.completed", scope: "LocalSendNode")
     }
 
     public func announce() async throws {
@@ -187,7 +209,25 @@ public final class LocalSendNode: @unchecked Sendable {
             download: info.download,
             announce: true
         )
+        logger.emit(
+            level: .debug,
+            event: "discovery.announce.started",
+            scope: "LocalSendNode",
+            attributes: [
+                .int("server.port", endpoint.port),
+                .string("localsend.protocol_type", endpoint.protocolType.rawValue)
+            ]
+        )
         try await discoveryService.announce(message)
+        logger.emit(
+            level: .debug,
+            event: "discovery.announce.succeeded",
+            scope: "LocalSendNode",
+            attributes: [
+                .int("server.port", endpoint.port),
+                .string("localsend.protocol_type", endpoint.protocolType.rawValue)
+            ]
+        )
     }
 
     public func discoverPeers() -> AsyncStream<DiscoveredPeer> {

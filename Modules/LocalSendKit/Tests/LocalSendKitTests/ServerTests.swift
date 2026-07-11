@@ -1,3 +1,4 @@
+import AppLogging
 import Foundation
 import Testing
 @testable import LocalSendKit
@@ -7,7 +8,8 @@ struct ServerTests {
         uploadPolicy: PrepareUploadPolicy = .acceptAll,
         pin: String? = nil,
         sharedFiles: [String: LocalSharedFile] = [:],
-        allowDownloads: Bool = true
+        allowDownloads: Bool = true,
+        logger: AppLogger = .disabled()
     ) -> LocalSendServer {
         let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
         return LocalSendServer(
@@ -25,7 +27,8 @@ struct ServerTests {
                 uploadPolicy: uploadPolicy,
                 sharedFiles: sharedFiles,
                 allowDownloads: allowDownloads,
-                storageDirectory: directory
+                storageDirectory: directory,
+                logger: logger
             )
         )
     }
@@ -238,5 +241,36 @@ struct ServerTests {
             HTTPRequest(method: .post, path: "\(LocalSendKit.apiPrefix)/prepare-upload", remoteAddress: "10.0.0.13")
         )
         #expect(response.statusCode == 400)
+    }
+
+    @Test func structuredServerLogsIncludeRouteAndRequestCorrelation() async throws {
+        let sink = RecordingLogSink()
+        let logger = AppLogger(
+            configuration: AppLoggerConfiguration(minimumLevel: .debug, redactSensitiveValues: true),
+            sinks: [sink]
+        )
+        let server = makeServer(logger: logger)
+        let body = try JSONEncoder().encode(sampleUploadRequest())
+        let request = HTTPRequest(
+            method: .post,
+            path: "\(LocalSendKit.apiPrefix)/prepare-upload",
+            headers: ["Content-Length": "\(body.count)"],
+            body: body,
+            remoteAddress: "10.0.0.14",
+            requestID: "request-1",
+            connectionID: "connection-1"
+        )
+
+        let response = try await server.handle(request)
+        #expect(response.statusCode == 200)
+
+        try await Task.sleep(for: .milliseconds(50))
+        await logger.flush()
+        let records = await sink.records()
+        let allowed = try #require(records.last(where: { $0.attributes["event.name"] == .string("protocol.prepare_upload.allowed") }))
+        #expect(allowed.attributes["request.request_id"] == .string("request-1"))
+        #expect(allowed.attributes["request.connection_id"] == .string("connection-1"))
+        #expect(allowed.attributes["url.path"] == .string("\(LocalSendKit.apiPrefix)/prepare-upload"))
+        #expect(allowed.attributes["http.response.status_code"] == .int(200))
     }
 }

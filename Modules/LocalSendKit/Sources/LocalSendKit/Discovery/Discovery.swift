@@ -1,3 +1,4 @@
+import AppLogging
 import Foundation
 import Network
 
@@ -87,12 +88,14 @@ public final class MulticastListenerRuntime: @unchecked Sendable {
     private let group: NWConnectionGroup
     private let queue: DispatchQueue
     private let callback: @Sendable (DiscoveredPeer) -> Void
+    private let logger: AppLogger
 
     public init(
         multicastHost: String,
         port: UInt16,
         selfFingerprint: String,
         queue: DispatchQueue = DispatchQueue(label: "MulticastListenerRuntime"),
+        logger: AppLogger = .disabled(),
         callback: @escaping @Sendable (DiscoveredPeer) -> Void
     ) throws {
         guard let host = IPv4Address(multicastHost) else {
@@ -103,24 +106,51 @@ public final class MulticastListenerRuntime: @unchecked Sendable {
         self.group = NWConnectionGroup(with: group, using: .udp)
         self.selfFingerprint = selfFingerprint
         self.queue = queue
+        self.logger = logger
         self.callback = callback
     }
 
     public func start() {
+        logger.emit(
+            level: .info,
+            event: "discovery.listener.started",
+            scope: "MulticastListenerRuntime"
+        )
         group.setReceiveHandler(maximumMessageSize: 64 * 1024, rejectOversizedMessages: true) { [self] message, content, _ in
             guard let data = content else { return }
-            guard
-                let remoteHost = Self.remoteHost(from: message.remoteEndpoint),
-                let peer = try? MulticastListener.decodeAnnouncement(data, selfFingerprint: selfFingerprint, host: remoteHost)
-            else {
+            guard let remoteHost = Self.remoteHost(from: message.remoteEndpoint) else {
+                logger.emit(level: .debug, event: "discovery.multicast.receive_failed", scope: "MulticastListenerRuntime")
                 return
             }
-            callback(peer)
+
+            do {
+                guard let peer = try MulticastListener.decodeAnnouncement(data, selfFingerprint: selfFingerprint, host: remoteHost) else {
+                    return
+                }
+                callback(peer)
+            } catch {
+                logger.emit(
+                    level: .warning,
+                    event: "discovery.multicast.receive_failed",
+                    scope: "MulticastListenerRuntime",
+                    attributes: [
+                        .string("client.address", remoteHost),
+                        .string("error.message", error.localizedDescription),
+                        .string("error.type", String(describing: type(of: error)))
+                    ]
+                )
+                return
+            }
         }
         group.start(queue: queue)
     }
 
     public func stop() {
+        logger.emit(
+            level: .info,
+            event: "discovery.listener.stopped",
+            scope: "MulticastListenerRuntime"
+        )
         group.cancel()
     }
 
@@ -139,11 +169,13 @@ public final class MulticastAnnouncerRuntime: @unchecked Sendable {
     private let connection: NWConnection
     private let queue: DispatchQueue
     private let logError: @Sendable (Error) -> Void
+    private let logger: AppLogger
 
     public init(
         multicastHost: String,
         port: UInt16,
         queue: DispatchQueue = DispatchQueue(label: "MulticastAnnouncerRuntime"),
+        logger: AppLogger = .disabled(),
         logError: @escaping @Sendable (Error) -> Void = { _ in }
     ) throws {
         guard let host = IPv4Address(multicastHost) else {
@@ -151,6 +183,7 @@ public final class MulticastAnnouncerRuntime: @unchecked Sendable {
         }
         self.connection = NWConnection(host: .ipv4(host), port: NWEndpoint.Port(rawValue: port)!, using: .udp)
         self.queue = queue
+        self.logger = logger
         self.logError = logError
     }
 
@@ -163,10 +196,22 @@ public final class MulticastAnnouncerRuntime: @unchecked Sendable {
     }
 
     public func announce(_ message: MulticastMessage) async throws {
+        logger.emit(
+            level: .debug,
+            event: "discovery.announce.started",
+            scope: "MulticastAnnouncerRuntime",
+            attributes: [.string("peer.protocol_type", message.protocolType.rawValue)]
+        )
         for attempt in try MulticastAnnouncer.makeAttempts(for: message) {
             try await Task.sleep(for: .milliseconds(attempt.delayMilliseconds))
             try await send(payload: attempt.payload)
         }
+        logger.emit(
+            level: .debug,
+            event: "discovery.announce.succeeded",
+            scope: "MulticastAnnouncerRuntime",
+            attributes: [.string("peer.protocol_type", message.protocolType.rawValue)]
+        )
     }
 
     public func respond(to message: MulticastMessage) async throws {
@@ -179,6 +224,15 @@ public final class MulticastAnnouncerRuntime: @unchecked Sendable {
             connection.send(content: payload, completion: .contentProcessed { error in
                 if let error {
                     self.logError(error)
+                    self.logger.emit(
+                        level: .warning,
+                        event: "discovery.multicast.send_failed",
+                        scope: "MulticastAnnouncerRuntime",
+                        attributes: [
+                            .string("error.message", error.localizedDescription),
+                            .string("error.type", String(describing: type(of: error)))
+                        ]
+                    )
                     continuation.resume(throwing: error)
                 } else {
                     continuation.resume(returning: ())
@@ -193,6 +247,7 @@ public final class DiscoveryService: @unchecked Sendable {
     private let announcer: MulticastAnnouncerRuntime
     private let registerResponder: @Sendable (RegisterInfo) async -> Bool
     private let peersObserver: (@Sendable ([DiscoveredPeer]) async -> Void)?
+    private let logger: AppLogger
     private let stateQueue = DispatchQueue(label: "DiscoveryService.state")
     private var continuations: [UUID: AsyncStream<DiscoveredPeer>.Continuation] = [:]
     private var peersByFingerprint: [String: DiscoveredPeer] = [:]
@@ -201,12 +256,14 @@ public final class DiscoveryService: @unchecked Sendable {
         listener: MulticastListenerRuntime,
         announcer: MulticastAnnouncerRuntime,
         registerResponder: @escaping @Sendable (RegisterInfo) async -> Bool,
-        peersObserver: (@Sendable ([DiscoveredPeer]) async -> Void)? = nil
+        peersObserver: (@Sendable ([DiscoveredPeer]) async -> Void)? = nil,
+        logger: AppLogger = .disabled()
     ) {
         self.listener = listener
         self.announcer = announcer
         self.registerResponder = registerResponder
         self.peersObserver = peersObserver
+        self.logger = logger
     }
 
     public func start() {
@@ -247,20 +304,47 @@ public final class DiscoveryService: @unchecked Sendable {
     }
 
     public func handle(peer: DiscoveredPeer, localInfo: RegisterInfo) async {
-        let peersSnapshot = stateQueue.sync { () -> [DiscoveredPeer] in
+        let (peersSnapshot, eventName) = stateQueue.sync { () -> ([DiscoveredPeer], String) in
+            let existing = peersByFingerprint[peer.info.fingerprint]
             peersByFingerprint[peer.info.fingerprint] = peer
-            return sortedPeersLocked()
+            return (sortedPeersLocked(), existing == nil ? "discovery.peer.discovered" : "discovery.peer.updated")
         }
+        logger.emit(
+            level: eventName == "discovery.peer.discovered" ? .info : .debug,
+            event: eventName,
+            scope: "DiscoveryService",
+            attributes: [
+                .string("peer.id", peer.info.fingerprint),
+                .string("peer.alias", peer.info.alias),
+                .string("peer.host", peer.host),
+                .string("peer.protocol_type", peer.info.protocolType?.rawValue ?? "https")
+            ]
+        )
         stateQueue.sync {
             for continuation in continuations.values {
                 continuation.yield(peer)
             }
         }
         await peersObserver?(peersSnapshot)
+        logger.emit(
+            level: .debug,
+            event: "discovery.peer.snapshot",
+            scope: "DiscoveryService",
+            attributes: [.int("peer.count", peersSnapshot.count)]
+        )
 
         guard peer.shouldReplyViaRegister else { return }
         let didRespondViaRegister = await registerResponder(peer.info)
         guard didRespondViaRegister == false else { return }
+        logger.emit(
+            level: .debug,
+            event: "discovery.announce.started",
+            scope: "DiscoveryService",
+            attributes: [
+                .string("event.action", "register_fallback"),
+                .string("peer.alias", peer.info.alias)
+            ]
+        )
         let response = MulticastMessage(
             alias: localInfo.alias,
             version: localInfo.version,
@@ -272,7 +356,30 @@ public final class DiscoveryService: @unchecked Sendable {
             download: localInfo.download,
             announce: false
         )
-        try? await announcer.respond(to: response)
+        do {
+            try await announcer.respond(to: response)
+            logger.emit(
+                level: .debug,
+                event: "discovery.announce.succeeded",
+                scope: "DiscoveryService",
+                attributes: [
+                    .string("event.action", "register_fallback"),
+                    .string("peer.alias", peer.info.alias)
+                ]
+            )
+        } catch {
+            logger.emit(
+                level: .warning,
+                event: "discovery.announce.failed",
+                scope: "DiscoveryService",
+                attributes: [
+                    .string("event.action", "register_fallback"),
+                    .string("peer.alias", peer.info.alias),
+                    .string("error.message", error.localizedDescription),
+                    .string("error.type", String(describing: type(of: error)))
+                ]
+            )
+        }
     }
 
     public func announce(_ message: MulticastMessage) async throws {

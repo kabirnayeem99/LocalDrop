@@ -76,6 +76,8 @@ public struct HTTPRequest: Sendable, Equatable {
     public var headers: [String: String]
     public var body: HTTPRequestBody
     public var remoteAddress: String
+    public var requestID: String?
+    public var connectionID: String?
 
     public init(
         method: HTTPMethod,
@@ -83,7 +85,9 @@ public struct HTTPRequest: Sendable, Equatable {
         query: [String: String] = [:],
         headers: [String: String] = [:],
         body: HTTPRequestBody = .data(Data()),
-        remoteAddress: String
+        remoteAddress: String,
+        requestID: String? = nil,
+        connectionID: String? = nil
     ) {
         self.method = method
         self.path = path
@@ -91,6 +95,8 @@ public struct HTTPRequest: Sendable, Equatable {
         self.headers = headers
         self.body = body
         self.remoteAddress = remoteAddress
+        self.requestID = requestID
+        self.connectionID = connectionID
     }
 
     public init(
@@ -99,7 +105,9 @@ public struct HTTPRequest: Sendable, Equatable {
         query: [String: String] = [:],
         headers: [String: String] = [:],
         body: Data,
-        remoteAddress: String
+        remoteAddress: String,
+        requestID: String? = nil,
+        connectionID: String? = nil
     ) {
         self.init(
             method: method,
@@ -107,7 +115,9 @@ public struct HTTPRequest: Sendable, Equatable {
             query: query,
             headers: headers,
             body: .data(body),
-            remoteAddress: remoteAddress
+            remoteAddress: remoteAddress,
+            requestID: requestID,
+            connectionID: connectionID
         )
     }
 

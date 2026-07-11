@@ -6,57 +6,46 @@ This document captures the current feature and UX gaps found from a code audit o
 
 ## Recommended Approach Order
 
-1. Implement working in-window send pickers on the Send screen.
-   - The main window exposes File / Folder / Text / Paste selection tiles, but those buttons only update local selection state and do not trigger any action in `SendView`.
-   - Current app-level file and folder import only exist in `LocalDropApp.swift` via `.fileImporter`, so the primary send workflow still depends on drag and drop or app/menu commands.
-   - This is the highest-impact workflow gap and unblocks validation of the core send path.
-
-2. Implement clipboard and plain-text sending.
-   - `Send Text…` is present but disabled in the app command menu.
-   - `Send Text / Clipboard…` is present but disabled in the menu bar extra.
-   - The Send screen shows a `Paste` tile, but there is no pasteboard integration in the app code.
-   - This completes the exposed send entry points with moderate implementation complexity.
-
-3. Replace sample transfer history with real persisted history.
+1. Replace sample transfer history with real persisted history.
    - `TransferFeatureStore` initializes `historyEntries` from `HistoryEntry.samples`.
    - The current code does not append completed, declined, sent, or received transfers into history.
    - `clearHistory()` only clears the current in-memory array.
    - This is a trust and correctness gap, but it should follow the core send-flow fixes so history attaches to real lifecycle events.
 
-4. Add actions to open or reveal received items.
+2. Add actions to open or reveal received items.
    - History rows are display-only.
    - There are no Finder reveal or open-file actions wired from history or receive flows.
    - This depends on real persisted history and reliable destination URL storage.
 
-5. Wire settings that are stored but not connected to platform behavior.
+3. Wire settings that are stored but not connected to platform behavior.
    - `launchAtLogin` is persisted but has no login-item integration.
    - `minimizeToMenuBar` is persisted but has no window-close behavior.
    - `language` is persisted but has no localization wiring.
    - `accentColor` is editable in settings but is not applied broadly as a dynamic app-wide theme choice.
    - These are misleading settings and should be fixed after the core transfer workflow is trustworthy.
 
-6. Improve error surfacing.
+4. Improve error surfacing.
    - The store captures `lastErrorMessage` for runtime start, import, send, and settings-update failures.
    - The UI only shows transient feedback banners and does not present a persistent error panel or alert tied to those stored failures.
    - This is broadly useful, but more effective once the main app flows above are fully wired.
 
-7. Allow editing the device name from the app.
+5. Allow editing the device name from the app.
    - The device name is shown in settings as read-only text.
    - The protocol settings already carry a device name, but the app does not expose an editing flow.
    - This is useful and relatively contained, but it does not block the core workflow.
 
-8. Implement favorites / trusted devices as a real concept.
+6. Implement favorites / trusted devices as a real concept.
     - `QuickSaveMode.favorites` exists.
     - `Auto-accept from favorites` exists in settings.
     - There is no favorites model, no favorite-device management UI, and no runtime logic that enforces trusted senders.
     - This is conceptually larger and depends on product/runtime decisions, so it should follow the core workflow fixes.
 
-9. Implement pause receiving.
+7. Implement pause receiving.
     - `Pause Receiving` exists in the menu bar extra but is disabled.
     - There is no store/runtime API for pausing discovery or inbound acceptance without fully stopping the runtime.
     - This is explicitly blocked by missing runtime capability and should stay behind higher-value workflow work.
 
-10. Run the UI/UX motion polish pass after the functional seams are real.
+8. Run the UI/UX motion polish pass after the functional seams are real.
     - Start with drop-zone drag feedback, device-card hover/press states, staged-file transitions, and transfer progress/completion polish.
     - Follow with the larger animation and semantic-color backlog once the underlying state changes are stable.
     - This work is valuable, but it should attach to true behaviors rather than placeholders.

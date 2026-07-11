@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 @testable import FeatureTransfer
 import AppLogging
@@ -723,6 +724,138 @@ final class FeatureTransferTests: XCTestCase {
         _ = RootView(store: store, sendEntryActions: actions).body
         _ = SendTextEntrySheet(initialText: "", onStage: { _ in }, onCancel: {}).body
         _ = SendTextEntrySheet(initialText: "hello", onStage: { _ in }, onCancel: {}).body
+    }
+
+    func testStageImportedItemsStagesFilesAndSwitchesToSendScreen() async {
+        let runtime = FakeTransferRuntime()
+        let container = TransferFeatureContainer(
+            store: TransferFeatureStore(
+                runtime: runtime,
+                settingsPersistence: InMemorySettingsPersistence(),
+                snapshot: .default(
+                    deviceName: "LocalDrop Test Mac",
+                    saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
+                )
+            ),
+            logger: .disabled()
+        )
+        // Default screen is .receive; staging imports must switch to .send.
+        XCTAssertEqual(container.store.screen, .receive)
+
+        let urls = [
+            URL(fileURLWithPath: "/tmp/LocalDropTests/one.pdf"),
+            URL(fileURLWithPath: "/tmp/LocalDropTests/two.jpg")
+        ]
+        container.stageImportedItems(urls)
+
+        XCTAssertEqual(container.store.screen, .send)
+        XCTAssertEqual(container.store.stagedItems.map(\.fileURL), urls)
+        await waitUntil { await runtime.stagedItems.map(\.fileURL) == urls }
+    }
+
+    func testStagePastedTextReportsFailureWhenFileCannotBeWritten() throws {
+        let container = TransferFeatureContainer.testing()
+        // Use an existing regular file as the target "directory" so createDirectory throws.
+        let blockingFile = makeTempDirectory().appendingPathComponent("not-a-directory", isDirectory: false)
+        try "blocker".write(to: blockingFile, atomically: true, encoding: .utf8)
+
+        XCTAssertFalse(container.stagePastedText("payload", in: blockingFile))
+        XCTAssertEqual(container.store.feedback?.tone, .destructive)
+        XCTAssertNotNil(container.store.lastErrorMessage)
+        XCTAssertEqual(container.store.screen, .send)
+        XCTAssertTrue(container.store.stagedItems.isEmpty)
+    }
+
+    func testStagePastedTextUsesDefaultOutboundDirectoryWhenUnspecified() throws {
+        let container = TransferFeatureContainer.testing()
+
+        XCTAssertTrue(container.stagePastedText("default directory payload"))
+
+        let stagedURL = try XCTUnwrap(container.store.stagedItems.first?.fileURL)
+        addTeardownBlock { try? FileManager.default.removeItem(at: stagedURL) }
+        XCTAssertEqual(stagedURL.pathExtension, "txt")
+        XCTAssertEqual(stagedURL.deletingLastPathComponent().lastPathComponent, "OutgoingText")
+        XCTAssertEqual(try String(contentsOf: stagedURL), "default directory payload")
+    }
+
+    func testSendEntryKindExposesSymbolsAndNoopActionsAreInert() {
+        for kind in SendEntryKind.allCases {
+            XCTAssertFalse(kind.symbol.isEmpty)
+            XCTAssertEqual(kind.id, kind.rawValue)
+            // .noop closures must be safe to invoke and do nothing.
+            kind.perform(using: .noop)
+        }
+    }
+
+    func testTextStagingEmitsStructuredLogsForImportSuccessAndFailure() async throws {
+        let sink = RecordingLogSink()
+        let logger = AppLogger(
+            configuration: AppLoggerConfiguration(minimumLevel: .debug, redactSensitiveValues: true),
+            resource: [.string("service.name", "LocalDrop")],
+            sinks: [sink]
+        )
+        let runtime = FakeTransferRuntime()
+        let container = TransferFeatureContainer(
+            store: TransferFeatureStore(
+                runtime: runtime,
+                settingsPersistence: InMemorySettingsPersistence(),
+                snapshot: .default(
+                    deviceName: "LocalDrop Test Mac",
+                    saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
+                ),
+                logger: logger
+            ),
+            logger: logger
+        )
+
+        container.stageImportedItems([URL(fileURLWithPath: "/tmp/LocalDropTests/report.pdf")])
+
+        let textDirectory = makeTempDirectory()
+        XCTAssertTrue(container.stagePastedText("logged text", in: textDirectory))
+
+        let blockingFile = makeTempDirectory().appendingPathComponent("blocker", isDirectory: false)
+        try "x".write(to: blockingFile, atomically: true, encoding: .utf8)
+        XCTAssertFalse(container.stagePastedText("cannot write", in: blockingFile))
+
+        // Empty input drives the same failure logging with a nil error, covering
+        // the message fallback branch inside the enabled-logger autoclosure.
+        XCTAssertFalse(container.stagePastedText("   "))
+
+        await waitUntil {
+            let eventNames = await sink.records().compactMap { record -> String? in
+                if case .string(let value) = record.attributes["event.name"] {
+                    return value
+                }
+                return nil
+            }
+            return eventNames.contains("app.import.files.selected")
+                && eventNames.contains("app.import.text.staged")
+                && eventNames.contains("app.import.text.failed")
+                && eventNames.contains("app.import.text.empty")
+        }
+    }
+
+    func testClipboardStagingReadsDefaultSystemPasteboard() throws {
+        let pasteboard = NSPasteboard.general
+        let previousContents = pasteboard.string(forType: .string)
+        addTeardownBlock {
+            pasteboard.clearContents()
+            if let previousContents {
+                pasteboard.setString(previousContents, forType: .string)
+            }
+        }
+
+        pasteboard.clearContents()
+        pasteboard.setString("system pasteboard text", forType: .string)
+
+        let container = TransferFeatureContainer.testing()
+        // Exercises the default stringProvider that reads NSPasteboard.general.
+        let result = container.stageClipboardTextIfAvailable(in: makeTempDirectory())
+
+        XCTAssertEqual(result, .staged)
+        let stagedURL = try XCTUnwrap(container.store.stagedItems.first?.fileURL)
+        addTeardownBlock { try? FileManager.default.removeItem(at: stagedURL) }
+        XCTAssertEqual(try String(contentsOf: stagedURL), "system pasteboard text")
     }
 
     func testStoreEmitsStructuredLogsForStartStageSendAndSettingsFailure() async {

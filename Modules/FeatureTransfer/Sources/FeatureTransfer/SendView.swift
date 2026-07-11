@@ -17,6 +17,7 @@ struct SendView: View {
 
     private let columns = [GridItem(.flexible(), spacing: Spacing.sm), GridItem(.flexible(), spacing: Spacing.sm)]
     private let selectionColumns = Array(repeating: GridItem(.flexible(), spacing: Spacing.sm), count: 4)
+    private let stagedItemsMaxHeight: CGFloat = 248
 
     init(store: TransferFeatureStore, actions: SendEntryActions = .noop) {
         self._store = Bindable(store)
@@ -42,8 +43,8 @@ struct SendView: View {
                 }
                 .padding(.top, Spacing.sm)
 
-                if let staged = store.stagedItems.first {
-                    StagedFileChip(file: staged) { store.removeStagedItem(id: staged.id) }
+                if store.stagedItems.isEmpty == false {
+                    stagedItemsSection
                         .padding(.top, Spacing.sm + Spacing.xxs)
                         .transition(.asymmetric(
                             insertion: .move(edge: .top).combined(with: .opacity),
@@ -136,6 +137,43 @@ struct SendView: View {
         Text(text)
             .font(Typography.headline)
             .foregroundStyle(.primary)
+    }
+
+    private var stagedItemsSection: some View {
+        VStack(alignment: .leading, spacing: Spacing.sm) {
+            HStack(alignment: .firstTextBaseline, spacing: Spacing.sm) {
+                sectionTitle("Staged Items")
+                Spacer(minLength: 0)
+                Text(store.stagedItems.stagedBatchSummaryLabel)
+                    .font(Typography.subheadline)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("send-staged-summary")
+            }
+
+            ScrollView {
+                LazyVStack(spacing: Spacing.xs + Spacing.xxs) {
+                    ForEach(store.stagedItems) { staged in
+                        StagedFileChip(file: staged) {
+                            store.removeStagedItem(id: staged.id)
+                        }
+                        .accessibilityIdentifier("send-staged-item-\(staged.name)")
+                    }
+                }
+                .padding(.vertical, 1)
+            }
+            .frame(maxHeight: stagedItemsScrollHeight)
+        }
+        .padding(Spacing.md)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle.continuous(Radius.xl))
+        .overlay {
+            RoundedRectangle.continuous(Radius.xl)
+                .strokeBorder(AccentColor.primary.opacity(0.14), lineWidth: 0.5)
+        }
+    }
+
+    private var stagedItemsScrollHeight: CGFloat {
+        let visibleItemCount = min(max(store.stagedItems.count, 1), 4)
+        return min(CGFloat(visibleItemCount) * 72, stagedItemsMaxHeight)
     }
 
     private func flashDropZoneAccepted() {
@@ -325,6 +363,7 @@ private struct StagedFileChip: View {
                     .background(Color(nsColor: .systemGray).opacity(0.15), in: Circle())
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Remove \(file.name)")
         }
         .padding(.horizontal, Spacing.md - Spacing.xxs)
         .padding(.vertical, Spacing.sm)

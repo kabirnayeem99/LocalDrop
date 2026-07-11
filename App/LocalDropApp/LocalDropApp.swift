@@ -16,10 +16,21 @@ struct LocalDropApp: App {
         let arguments = ProcessInfo.processInfo.arguments
         let isUITesting = arguments.contains("--ui-testing")
         let enableIncomingPINForUITests = arguments.contains("--ui-testing-incoming-pin-enabled")
+        let seedStagedBatchForUITests = arguments.contains("--ui-testing-seed-staged-batch")
+        let initialContainer: TransferFeatureContainer
+
+        if isUITesting {
+            let container = TransferFeatureContainer.testing(requirePIN: enableIncomingPINForUITests)
+            if seedStagedBatchForUITests {
+                Self.seedUITestStagedBatch(into: container)
+            }
+            initialContainer = container
+        } else {
+            initialContainer = .live()
+        }
+
         _container = State(
-            initialValue: isUITesting
-                ? .testing(requirePIN: enableIncomingPINForUITests)
-                : .live()
+            initialValue: initialContainer
         )
     }
 
@@ -59,17 +70,17 @@ struct LocalDropApp: App {
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("Send File…") {
-                    showFileImporter()
+                    beginFileSend()
                 }
                 .keyboardShortcut("o", modifiers: [.command])
 
                 Button("Send Folder…") {
-                    showFolderImporter()
+                    beginFolderSend()
                 }
                 .keyboardShortcut("o", modifiers: [.command, .shift])
 
                 Button("Send Text…") {
-                    showTextEntry()
+                    beginTextSend()
                 }
                     .keyboardShortcut("t", modifiers: [.command])
 
@@ -124,8 +135,8 @@ struct LocalDropApp: App {
         MenuBarExtra {
             container.menuBarExtraView(
                 actions: TransferMenuActions(
-                    sendFiles: showFileImporter,
-                    sendFolders: showFolderImporter,
+                    sendFiles: beginFileSend,
+                    sendFolders: beginFolderSend,
                     sendTextOrClipboard: sendTextOrClipboard,
                     openLocalDrop: openLocalDrop,
                     openPreferences: openPreferences,
@@ -146,11 +157,27 @@ struct LocalDropApp: App {
         isFolderImporterPresented = true
     }
 
+    private func beginFileSend() {
+        container.showSend()
+        openLocalDrop()
+        showFileImporter()
+    }
+
+    private func beginFolderSend() {
+        container.showSend()
+        openLocalDrop()
+        showFolderImporter()
+    }
+
+    private func beginTextSend(prefilledText: String = "") {
+        showTextEntry(prefilledText: prefilledText)
+    }
+
     private var sendEntryActions: SendEntryActions {
         SendEntryActions(
-            sendFiles: showFileImporter,
-            sendFolders: showFolderImporter,
-            sendText: { showTextEntry() },
+            sendFiles: beginFileSend,
+            sendFolders: beginFolderSend,
+            sendText: { beginTextSend() },
             sendClipboard: sendTextOrClipboard
         )
     }
@@ -210,5 +237,24 @@ struct LocalDropApp: App {
         case .failed:
             openLocalDrop()
         }
+    }
+
+    private static func seedUITestStagedBatch(into container: TransferFeatureContainer) {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("LocalDropUITests", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let files = [
+            ("alpha.txt", "alpha"),
+            ("bravo.pdf", "bravo"),
+            ("charlie.jpg", "charlie")
+        ]
+
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let urls = files.map { name, contents -> URL in
+            let url = root.appendingPathComponent(name, isDirectory: false)
+            try? contents.write(to: url, atomically: true, encoding: .utf8)
+            return url
+        }
+        container.stageImportedItems(urls)
     }
 }

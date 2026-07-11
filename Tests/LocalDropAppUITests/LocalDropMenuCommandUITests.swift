@@ -38,29 +38,19 @@ final class LocalDropMenuCommandUITests: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any)["screen-settings"].waitForExistence(timeout: 2))
     }
 
-    func testAppMenusExposeTransferCommands() {
+    func testSendTextCommandShortcutOpensSheet() {
         app.launch()
 
-        XCTAssertTrue(app.menuBars.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["screen-receive"].waitForExistence(timeout: 5))
 
-        clickMenuBarItem(named: "File")
-        XCTAssertTrue(app.menuItems["Send File…"].waitForExistence(timeout: 2))
-        XCTAssertTrue(app.menuItems["Send Folder…"].exists)
-        XCTAssertTrue(app.menuItems["Send Text…"].exists)
-        XCTAssertTrue(app.menuItems["Clear History"].exists)
-        app.typeKey(.escape, modifierFlags: [])
+        app.typeKey("t", modifierFlags: .command)
 
-        clickMenuBarItem(named: "View")
-        XCTAssertTrue(app.menuItems["Receive"].waitForExistence(timeout: 2))
-        XCTAssertTrue(app.menuItems["Send"].exists)
-        XCTAssertTrue(app.menuItems["History"].exists)
-        XCTAssertTrue(app.menuItems["Settings"].exists)
-        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(app.staticTexts["Send Text"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.buttons["Stage Text"].exists)
+        XCTAssertTrue(app.buttons["Cancel"].exists)
 
-        clickMenuBarItem(named: "Help")
-        XCTAssertTrue(app.menuItems["LocalDrop Help"].waitForExistence(timeout: 2))
-        XCTAssertTrue(app.menuItems["LocalSend Protocol Docs"].exists)
-        XCTAssertTrue(app.menuItems["Report an Issue"].exists)
+        app.buttons["Cancel"].click()
+        XCTAssertFalse(app.staticTexts["Send Text"].waitForExistence(timeout: 1))
     }
 
     func testSettingsAllowsRevealingAndRegeneratingIncomingPIN() {
@@ -89,6 +79,27 @@ final class LocalDropMenuCommandUITests: XCTestCase {
         XCTAssertNotEqual(regeneratedValue, originalValue)
     }
 
+    func testSeededBatchShowsMultipleStagedItemsAndSupportsRemovingOne() {
+        app.launchArguments = ["--ui-testing", "--ui-testing-seed-staged-batch"]
+        app.launch()
+
+        XCTAssertTrue(app.descendants(matching: .any)["screen-send"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["3 items staged · 17 bytes"].waitForExistence(timeout: 2))
+
+        XCTAssertTrue(app.staticTexts["alpha.txt"].exists)
+        XCTAssertTrue(app.staticTexts["bravo.pdf"].exists)
+        XCTAssertTrue(app.staticTexts["charlie.jpg"].exists)
+
+        let removeButton = app.buttons["Remove bravo.pdf"]
+        XCTAssertTrue(removeButton.waitForExistence(timeout: 2))
+        removeButton.click()
+
+        XCTAssertTrue(app.staticTexts["2 items staged · 12 bytes"].waitForExistence(timeout: 2))
+        XCTAssertFalse(app.staticTexts["bravo.pdf"].waitForExistence(timeout: 1))
+        XCTAssertTrue(app.staticTexts["alpha.txt"].exists)
+        XCTAssertTrue(app.staticTexts["charlie.jpg"].exists)
+    }
+
     private func waitForValueChange(
         ofElementWithID identifier: String,
         from originalValue: String?,
@@ -103,20 +114,5 @@ final class LocalDropMenuCommandUITests: XCTestCase {
             RunLoop.current.run(until: Date().addingTimeInterval(0.05))
         }
         return false
-    }
-
-    private func clickMenuBarItem(named name: String) {
-        let menuBars = app.menuBars
-
-        for index in 0..<menuBars.count {
-            let menuBar = menuBars.element(boundBy: index)
-            let item = menuBar.menuBarItems.matching(NSPredicate(format: "label == %@", name)).element(boundBy: 0)
-            if item.exists {
-                item.click()
-                return
-            }
-        }
-
-        XCTFail("Menu bar item not found: \(name)")
     }
 }

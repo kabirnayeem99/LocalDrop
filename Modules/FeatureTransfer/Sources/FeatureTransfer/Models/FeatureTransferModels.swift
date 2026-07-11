@@ -151,6 +151,28 @@ struct StagedTransferItem: Identifiable, Equatable, Sendable {
     let byteCount: Int64?
 }
 
+extension Collection where Element == StagedTransferItem {
+    var stagedItemCountLabel: String {
+        count == 1 ? "1 item" : "\(count) items"
+    }
+
+    var stagedTotalByteCount: Int64? {
+        let byteCounts = compactMap(\.byteCount)
+        guard byteCounts.isEmpty == false else { return nil }
+        return byteCounts.reduce(0, +)
+    }
+
+    var stagedTotalSizeLabel: String? {
+        guard let stagedTotalByteCount else { return nil }
+        return ByteCountFormatter.string(fromByteCount: stagedTotalByteCount, countStyle: .file)
+    }
+
+    var stagedBatchSummaryLabel: String {
+        guard let stagedTotalSizeLabel else { return stagedItemCountLabel }
+        return "\(stagedItemCountLabel) staged · \(stagedTotalSizeLabel)"
+    }
+}
+
 struct ActiveTransferProgress: Identifiable, Equatable, Sendable {
     enum Direction: Sendable {
         case sending

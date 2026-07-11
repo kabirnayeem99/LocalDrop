@@ -323,6 +323,7 @@ final class FeatureTransferTests: XCTestCase {
         )
 
         XCTAssertEqual(store.menuSummary.statusSymbol, "paperplane.circle")
+        XCTAssertNil(store.menuSummary.stagedItemsText)
         XCTAssertEqual(store.menuSummary.recentHistoryEntries.map(\.fileName), [
             "one.txt",
             "two.txt",
@@ -367,6 +368,37 @@ final class FeatureTransferTests: XCTestCase {
         XCTAssertEqual(store.menuSummary.statusSymbol, "paperplane.badge.clock")
         XCTAssertEqual(store.menuSummary.incomingRequestTitle, "Peer Mac wants to send 1 file")
         XCTAssertEqual(store.menuSummary.statusText, "Incoming request from Peer Mac")
+    }
+
+    func testStageDroppedItemsTracksEntireBatchAndRemoveRestagesRemainder() async throws {
+        let runtime = FakeTransferRuntime()
+        let store = TransferFeatureStore(
+            runtime: runtime,
+            settingsPersistence: InMemorySettingsPersistence(),
+            snapshot: .default(
+                deviceName: "LocalDrop Test Mac",
+                saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
+            )
+        )
+        let alpha = URL(fileURLWithPath: "/tmp/LocalDropTests/alpha.txt")
+        let bravo = URL(fileURLWithPath: "/tmp/LocalDropTests/bravo.txt")
+        let charlie = URL(fileURLWithPath: "/tmp/LocalDropTests/charlie.txt")
+
+        store.stageDroppedItems([alpha, bravo, charlie])
+
+        XCTAssertEqual(store.stagedItems.map(\.name), ["alpha.txt", "bravo.txt", "charlie.txt"])
+        XCTAssertEqual(store.feedback?.message, "3 items staged")
+        await waitUntil { await runtime.stagedItems.map(\.fileURL) == [alpha, bravo, charlie] }
+        XCTAssertEqual(store.menuSummary.stagedItemCount, 3)
+        XCTAssertEqual(store.menuSummary.stagedItemsText, store.stagedItems.stagedBatchSummaryLabel)
+
+        let removedID = try XCTUnwrap(store.stagedItems.dropFirst().first?.id)
+        store.removeStagedItem(id: removedID)
+
+        XCTAssertEqual(store.stagedItems.map(\.name), ["alpha.txt", "charlie.txt"])
+        await waitUntil { await runtime.stagedItems.map(\.fileURL) == [alpha, charlie] }
+        XCTAssertEqual(store.menuSummary.stagedItemCount, 2)
+        XCTAssertEqual(store.menuSummary.stagedItemsText, store.stagedItems.stagedBatchSummaryLabel)
     }
 
     func testMenuActionsDriveRuntimeAndStoreIntegration() async {
@@ -683,6 +715,10 @@ final class FeatureTransferTests: XCTestCase {
             sendClipboard: {}
         )
 
+        store.stageDroppedItems([
+            URL(fileURLWithPath: "/tmp/LocalDropTests/alpha.txt"),
+            URL(fileURLWithPath: "/tmp/LocalDropTests/bravo.txt")
+        ])
         _ = SendView(store: store, actions: actions).body
         _ = RootView(store: store, sendEntryActions: actions).body
         _ = SendTextEntrySheet(initialText: "", onStage: { _ in }, onCancel: {}).body

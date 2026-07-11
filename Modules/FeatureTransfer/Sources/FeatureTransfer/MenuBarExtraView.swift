@@ -30,6 +30,7 @@ struct TransferMenuSummary: Equatable {
     let headerTitle: String
     let statusText: String
     let stagedItemCount: Int
+    let stagedItemsText: String?
     let nearbyPeerCount: Int
     let canSendToPeers: Bool
     let activeTransferTitle: String?
@@ -44,8 +45,11 @@ struct TransferMenuBarExtraView: View {
     var body: some View {
         let summary = store.menuSummary
 
-        Text(summary.headerTitle)
+        Label(summary.headerTitle, systemImage: summary.statusSymbol)
         Text(summary.statusText)
+        if let stagedItemsText = summary.stagedItemsText {
+            Text(stagedItemsText)
+        }
         Divider()
 
         Button("Send File…") {
@@ -57,21 +61,22 @@ struct TransferMenuBarExtraView: View {
             actions.sendFolders()
         }
 
-        Button("Send Text / Clipboard…") {
+        Button("Send Text or Clipboard…") {
             actions.sendTextOrClipboard()
         }
 
         Divider()
 
-        Menu("Nearby Devices") {
-            if store.nearbyPeers.isEmpty {
+        Menu("Send to Nearby") {
+            if store.stagedItems.isEmpty {
+                Text("Stage files, folders, or text in LocalDrop first")
+            } else if store.nearbyPeers.isEmpty {
                 Text("No nearby devices")
             } else {
                 ForEach(store.nearbyPeers) { peer in
                     Button(peer.name) {
                         store.send(to: peer.id)
                     }
-                    .disabled(store.stagedItems.isEmpty)
                 }
             }
 
@@ -93,7 +98,7 @@ struct TransferMenuBarExtraView: View {
 
             Divider()
 
-            Button("Pause Receiving") {}
+            Button("Pause Receiving (Requires Runtime Support)") {}
                 .disabled(true)
         }
 
@@ -123,7 +128,7 @@ struct TransferMenuBarExtraView: View {
 
         Menu("Recent Transfers") {
             if summary.recentHistoryEntries.isEmpty {
-                Text("No recent transfers")
+                Text("No recent transfers yet")
             } else {
                 ForEach(summary.recentHistoryEntries) { entry in
                     Text(entry.menuTitle)
@@ -167,6 +172,7 @@ extension TransferFeatureStore {
             headerTitle: deviceName.isEmpty ? "LocalDrop" : deviceName,
             statusText: menuStatusText,
             stagedItemCount: stagedItems.count,
+            stagedItemsText: stagedItems.isEmpty ? nil : stagedItems.stagedBatchSummaryLabel,
             nearbyPeerCount: nearbyPeers.count,
             canSendToPeers: stagedItems.isEmpty == false && nearbyPeers.isEmpty == false,
             activeTransferTitle: activeTransfer?.menuTitle,

@@ -176,12 +176,26 @@ private struct SidebarRow: View {
                         .font(Typography.caption1.weight(.bold))
                         .foregroundStyle(.white)
                         .frame(minWidth: 16, minHeight: 16)
-                        .background(SemanticColor.pending, in: Capsule())
+                        .background(badgeTint, in: Capsule())
+                        .contentTransition(.numericText())
+                        .transition(.scale(scale: 0.9).combined(with: .opacity))
                         .accessibilityLabel(Text(String(format: String(localized: .init("root.activeItem"), bundle: .module), badgeCount)))
                 }
             }
         } icon: {
             Image(systemName: screen.symbol)
+        }
+        .animation(.spring(response: 0.24, dampingFraction: 0.82), value: badgeCount)
+    }
+
+    private var badgeTint: Color {
+        switch screen {
+        case .receive:
+            return SemanticColor.pending
+        case .send:
+            return SemanticColor.sending
+        case .history, .settings:
+            return SemanticColor.discovery
         }
     }
 }
@@ -262,7 +276,7 @@ private struct ThisDeviceChip: View {
                     RuntimeStatusDot(isAvailable: isAvailable, reduceMotion: reduceMotion)
                     Text(statusText)
                         .font(Typography.subheadline)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(isAvailable ? .secondary : SemanticColor.pending)
                 }
             }
 
@@ -270,12 +284,21 @@ private struct ThisDeviceChip: View {
         }
         .padding(.horizontal, Spacing.xs + Spacing.xxs)
         .padding(.vertical, Spacing.xs)
-        .background(accentTheme.primarySubtleFill.opacity(0.6), in: RoundedRectangle.continuous(Radius.lg))
+        .background(backgroundFill, in: RoundedRectangle.continuous(Radius.lg))
         .overlay {
             RoundedRectangle.continuous(Radius.lg)
-                .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5)
+                .strokeBorder(borderTint, lineWidth: 0.5)
         }
         .help(Text(String(format: String(localized: .init("thisDevice.statusHelp"), bundle: .module), statusText)))
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: isAvailable)
+    }
+
+    private var backgroundFill: Color {
+        isAvailable ? accentTheme.primarySubtleFill.opacity(0.6) : SemanticColor.pendingSubtleFill
+    }
+
+    private var borderTint: Color {
+        isAvailable ? Color(nsColor: .separatorColor) : SemanticColor.pending.opacity(0.22)
     }
 }
 

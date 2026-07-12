@@ -29,29 +29,37 @@ struct HistoryView: View {
                 HistoryEmptyState()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                List {
-                    ForEach(store.historyEntries) { entry in
-                        HistoryRowView(entry: entry, store: store)
-                            .transition(.move(edge: .leading).combined(with: .opacity))
+                ScrollView {
+                    LazyVStack(spacing: Spacing.xs + Spacing.xxs) {
+                        ForEach(store.historyEntries) { entry in
+                            HistoryRowView(entry: entry, store: store)
+                                .transition(.asymmetric(
+                                    insertion: .move(edge: .top).combined(with: .opacity),
+                                    removal: .opacity.combined(with: .scale(scale: 0.96))
+                                ))
+                        }
                     }
+                    .padding(.horizontal, 30)
+                    .padding(.bottom, Spacing.xl)
                 }
-                .listStyle(.inset(alternatesRowBackgrounds: true))
-                .scrollContentBackground(.hidden)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: store.historyEntries.isEmpty)
+        .animation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.82), value: store.historyEntries.map(\.id))
         .confirmationDialog(
             "history.clearConfirmTitle",
             isPresented: $showsClearConfirmation,
             titleVisibility: .visible
         ) {
             Button("history.clearAll", role: .destructive) {
-                store.clearHistory()
+                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
+                    store.clearHistory()
+                }
             }
             Button("general.cancel", role: .cancel) {}
         } message: {
-            Text("This removes the recent transfer list from this device.")
+            Text("history.clearAllMessage")
         }
     }
 }

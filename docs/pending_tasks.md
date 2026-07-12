@@ -24,22 +24,6 @@ This document captures the current feature and UX gaps found from a code audit o
    - `Pause Receiving` exists in the menu bar extra but is disabled.
    - There is no store/runtime API for pausing discovery or inbound acceptance without fully stopping the runtime.
 
-5. Run the UI/UX motion polish pass after the functional seams are real.
-   - Start with drop-zone drag feedback, device-card hover/press states, staged-file transitions, and transfer progress/completion polish.
-   - Follow with the larger animation and semantic-color backlog once the underlying state changes are stable.
-
-## Completed in this cycle
-
-- Replaced sample transfer history with real persisted history using `HistoryPersistenceAdapter`.
-- Added `Reveal in Finder` and `Open` actions to history rows.
-- Wired `Launch at login` via `SMAppServiceLoginItemManager`.
-- Wired `Minimize to menu bar on close` via the app delegate.
-- Added app menu commands (File, View, Preferences, Help) and a full status-item menu.
-- Added file/folder/text send entry points from the menu bar and app menu.
-- Wired `language` to localized strings via `Localizable.xcstrings` and extended `LanguageSetting` to the v1 supported-language set plus Uyghur, with endonyms and RTL awareness.
-- Wired `accentColor` to an environment-aware `AccentTheme` with system colors, eight named custom palettes, and a system-accent option; Medina Emerald is the default.
-- Added English-translation verification via `scripts/verify-featuretransfer-localizations.swift` and package-safe runtime localization fallback via `FeatureTransferLocalization`.
-
 ## Code Areas
 
 - App shell and import commands: `App/LocalDropApp/LocalDropApp.swift`

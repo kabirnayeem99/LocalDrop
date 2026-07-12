@@ -421,6 +421,50 @@ final class FeatureTransferTests: XCTestCase {
         XCTAssertEqual(store.menuSummary.stagedItemsText, store.stagedItems.stagedBatchSummaryLabel)
     }
 
+    func testRefreshNearbyPeersShowsRefreshFeedbackAndResetsFlag() async {
+        let runtime = FakeTransferRuntime()
+        let store = TransferFeatureStore(
+            runtime: runtime,
+            settingsPersistence: InMemorySettingsPersistence(),
+            historyPersistence: InMemoryHistoryPersistence(),
+            loginItemManaging: FakeLoginItemManaging(),
+            snapshot: .default(
+                deviceName: "LocalDrop Test Mac",
+                saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
+            )
+        )
+
+        store.refreshNearbyPeers()
+
+        XCTAssertTrue(store.isRefreshingDiscovery)
+        await waitUntil { await runtime.refreshDiscoveryCallCount == 1 }
+        await waitUntil { store.isRefreshingDiscovery == false }
+        XCTAssertEqual(store.feedback?.message, "Discovery refreshed")
+        XCTAssertEqual(store.feedback?.tone, .neutral)
+    }
+
+    func testScanNearbyPeersShowsScanFeedbackAndResetsFlag() async {
+        let runtime = FakeTransferRuntime()
+        let store = TransferFeatureStore(
+            runtime: runtime,
+            settingsPersistence: InMemorySettingsPersistence(),
+            historyPersistence: InMemoryHistoryPersistence(),
+            loginItemManaging: FakeLoginItemManaging(),
+            snapshot: .default(
+                deviceName: "LocalDrop Test Mac",
+                saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
+            )
+        )
+
+        store.scanNearbyPeers()
+
+        XCTAssertTrue(store.isScanningDiscovery)
+        await waitUntil { await runtime.refreshDiscoveryCallCount == 1 }
+        await waitUntil { store.isScanningDiscovery == false }
+        XCTAssertEqual(store.feedback?.message, "Discovery scan started")
+        XCTAssertEqual(store.feedback?.tone, .neutral)
+    }
+
     func testMenuActionsDriveRuntimeAndStoreIntegration() async {
         let runtime = FakeTransferRuntime()
         let persistence = InMemorySettingsPersistence()
@@ -526,6 +570,8 @@ final class FeatureTransferTests: XCTestCase {
         )
         store.acceptIncomingRequest(fileIDs: ["a"])
         await waitUntil { await runtime.responses == [subsetResponse] }
+        XCTAssertEqual(store.feedback?.message, "1 files accepted")
+        XCTAssertEqual(store.feedback?.tone, .success)
 
         await runtime.emitIncomingRequest(request)
         await waitUntil { store.incomingRequest?.id == "request-id" }
@@ -560,6 +606,42 @@ final class FeatureTransferTests: XCTestCase {
         store.dismissProgress()
 
         XCTAssertNil(store.activeTransfer)
+    }
+
+    func testNearbyDevicesPresentationStateReflectsDiscoveryActivity() {
+        XCTAssertEqual(
+            NearbyDevicesPresentationState(peerCount: 0, isRefreshing: false, isScanning: false),
+            .emptyIdle
+        )
+        XCTAssertEqual(
+            NearbyDevicesPresentationState(peerCount: 0, isRefreshing: true, isScanning: false),
+            .emptyRefreshing
+        )
+        XCTAssertEqual(
+            NearbyDevicesPresentationState(peerCount: 0, isRefreshing: false, isScanning: true),
+            .emptyScanning
+        )
+        XCTAssertEqual(
+            NearbyDevicesPresentationState(peerCount: 2, isRefreshing: true, isScanning: true),
+            .results
+        )
+    }
+
+    func testIncomingRequestSelectionStateTracksAllPartialAndNone() {
+        XCTAssertEqual(
+            IncomingRequestSelectionState(selectedCount: 0, totalCount: 3),
+            .none(totalCount: 3)
+        )
+        XCTAssertEqual(
+            IncomingRequestSelectionState(selectedCount: 2, totalCount: 3),
+            .partial(selectedCount: 2, totalCount: 3)
+        )
+        XCTAssertEqual(
+            IncomingRequestSelectionState(selectedCount: 3, totalCount: 3),
+            .all(totalCount: 3)
+        )
+        XCTAssertTrue(IncomingRequestSelectionState(selectedCount: 3, totalCount: 3).acceptsAll)
+        XCTAssertFalse(IncomingRequestSelectionState(selectedCount: 1, totalCount: 3).acceptsAll)
     }
 
     func testTransferSecurityCopyUsesHTTPAndHTTPSTerminology() {

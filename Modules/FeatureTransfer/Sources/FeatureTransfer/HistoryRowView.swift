@@ -5,7 +5,12 @@ struct HistoryRowView: View {
     let entry: HistoryEntry
     let store: TransferFeatureStore
 
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.appReducesMotion) private var appReduceMotion
+    @State private var highlightFreshEntry = false
+
     private var hasFile: Bool { entry.fileURL != nil }
+    private var reduceMotion: Bool { systemReduceMotion || appReduceMotion }
 
     var body: some View {
         HStack(spacing: Spacing.sm) {
@@ -42,7 +47,24 @@ struct HistoryRowView: View {
 
             fileActionsMenu
         }
+        .padding(.horizontal, Spacing.md)
         .padding(.vertical, Spacing.xxs)
+        .background(rowBackground, in: RoundedRectangle.continuous(Radius.lg))
+        .overlay {
+            RoundedRectangle.continuous(Radius.lg)
+                .strokeBorder(rowBorder, lineWidth: 0.5)
+        }
+        .onAppear {
+            guard reduceMotion == false, entry.outcome == .completed, isRecentlyCompleted else { return }
+            highlightFreshEntry = true
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 700_000_000)
+                withAnimation(.easeOut(duration: 0.35)) {
+                    highlightFreshEntry = false
+                }
+            }
+        }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.24), value: highlightFreshEntry)
     }
 
     private var fileActionsMenu: some View {
@@ -85,5 +107,20 @@ struct HistoryRowView: View {
         case .completed: return SemanticColor.success
         case .declined: return SemanticColor.destructive
         }
+    }
+
+    private var isRecentlyCompleted: Bool {
+        abs(entry.timestamp.timeIntervalSinceNow) < 8
+    }
+
+    private var rowBackground: Color {
+        if highlightFreshEntry {
+            return SemanticColor.successSubtleFill
+        }
+        return Color(nsColor: .controlBackgroundColor)
+    }
+
+    private var rowBorder: Color {
+        highlightFreshEntry ? SemanticColor.success.opacity(0.18) : Color(nsColor: .separatorColor)
     }
 }

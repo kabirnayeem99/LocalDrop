@@ -119,6 +119,57 @@ struct IncomingTransferRequest: Identifiable, Equatable, Sendable {
     let files: [IncomingTransferFile]
 }
 
+enum IncomingRequestSelectionState: Equatable, Sendable {
+    case none(totalCount: Int)
+    case partial(selectedCount: Int, totalCount: Int)
+    case all(totalCount: Int)
+
+    init(selectedCount: Int, totalCount: Int) {
+        if totalCount == 0 || selectedCount <= 0 {
+            self = .none(totalCount: totalCount)
+        } else if selectedCount >= totalCount {
+            self = .all(totalCount: totalCount)
+        } else {
+            self = .partial(selectedCount: selectedCount, totalCount: totalCount)
+        }
+    }
+
+    var acceptsAll: Bool {
+        if case .all = self {
+            return true
+        }
+        return false
+    }
+}
+
+enum NearbyDevicesPresentationState: Equatable, Sendable {
+    case results
+    case emptyIdle
+    case emptyRefreshing
+    case emptyScanning
+
+    init(peerCount: Int, isRefreshing: Bool, isScanning: Bool) {
+        if peerCount > 0 {
+            self = .results
+        } else if isScanning {
+            self = .emptyScanning
+        } else if isRefreshing {
+            self = .emptyRefreshing
+        } else {
+            self = .emptyIdle
+        }
+    }
+
+    var isShowingActivity: Bool {
+        switch self {
+        case .emptyRefreshing, .emptyScanning:
+            return true
+        case .results, .emptyIdle:
+            return false
+        }
+    }
+}
+
 struct TransferFeedback: Identifiable, Equatable, Sendable {
     enum Tone: String, Codable, Sendable {
         case neutral

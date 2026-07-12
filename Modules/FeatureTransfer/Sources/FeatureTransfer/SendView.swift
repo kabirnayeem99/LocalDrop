@@ -19,6 +19,13 @@ struct SendView: View {
     private let columns = [GridItem(.flexible(), spacing: Spacing.sm), GridItem(.flexible(), spacing: Spacing.sm)]
     private let selectionColumns = Array(repeating: GridItem(.flexible(), spacing: Spacing.sm), count: 4)
     private let stagedItemsMaxHeight: CGFloat = 248
+    private var nearbyDevicesPresentationState: NearbyDevicesPresentationState {
+        NearbyDevicesPresentationState(
+            peerCount: store.nearbyPeers.count,
+            isRefreshing: store.isRefreshingDiscovery,
+            isScanning: store.isScanningDiscovery
+        )
+    }
 
     init(store: TransferFeatureStore, actions: SendEntryActions = .noop) {
         self._store = Bindable(store)
@@ -76,10 +83,7 @@ struct SendView: View {
                 }
                 .padding(.top, Spacing.xl + Spacing.xxs)
 
-                if store.nearbyPeers.isEmpty {
-                    NearbyDevicesEmptyState()
-                        .padding(.top, Spacing.sm)
-                } else {
+                if nearbyDevicesPresentationState == .results {
                     LazyVGrid(columns: columns, spacing: Spacing.sm) {
                         ForEach(store.nearbyPeers) { device in
                             DeviceCardView(device: device) {
@@ -88,6 +92,14 @@ struct SendView: View {
                         }
                     }
                     .padding(.top, Spacing.sm)
+                    .transition(.asymmetric(
+                        insertion: .opacity.combined(with: .scale(scale: 0.98)),
+                        removal: .opacity
+                    ))
+                } else {
+                    NearbyDevicesEmptyState(state: nearbyDevicesPresentationState)
+                        .padding(.top, Spacing.sm)
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
                 }
 
                 DropZoneView(
@@ -132,6 +144,14 @@ struct SendView: View {
             cancelDropZoneReset()
             dropZoneStateToken += 1
         }
+        .animation(
+            reduceMotion ? nil : .easeOut(duration: 0.22),
+            value: nearbyDevicesPresentationState
+        )
+        .animation(
+            reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.82),
+            value: store.nearbyPeers.map(\.id)
+        )
     }
 
     private func sectionTitle(_ text: LocalizedStringKey) -> some View {
@@ -266,34 +286,41 @@ private struct ScanIcon: View {
     var body: some View {
         ZStack {
             if isScanning, !reduceMotion {
-                Circle()
-                    .stroke(SemanticColor.discovery.opacity(0.3), lineWidth: 1)
-                    .frame(width: 18, height: 18)
-                    .scaleEffect(1.25)
-                    .opacity(0.7)
+                TimelineView(.animation) { context in
+                    let phase = context.date.timeIntervalSinceReferenceDate
+                    ZStack {
+                        ForEach(0..<2, id: \.self) { index in
+                            let offset = Double(index) * 0.35
+                            let progress = phase.remainder(dividingBy: 0.9) / 0.9
+                            let adjustedProgress = (progress + offset).truncatingRemainder(dividingBy: 1)
+                            Circle()
+                                .stroke(SemanticColor.discovery.opacity(0.26 - (Double(index) * 0.06)), lineWidth: 1)
+                                .frame(width: 16, height: 16)
+                                .scaleEffect(1 + adjustedProgress * 0.7)
+                                .opacity(0.75 - adjustedProgress * 0.55)
+                        }
+                    }
+                }
+                .frame(width: 20, height: 20)
             }
             Image(systemName: "dot.radiowaves.left.and.right")
+                .foregroundStyle(isScanning ? SemanticColor.discovery : .primary)
         }
     }
 }
 
 private struct NearbyDevicesEmptyState: View {
+    let state: NearbyDevicesPresentationState
+
     var body: some View {
         HStack(spacing: Spacing.md) {
-            ZStack {
-                Circle()
-                    .fill(SemanticColor.discoverySubtleFill)
-                    .frame(width: 52, height: 52)
-                Image(systemName: "dot.radiowaves.left.and.right")
-                    .font(.system(size: 22, weight: .medium))
-                    .foregroundStyle(SemanticColor.discovery)
-            }
+            icon
 
             VStack(alignment: .leading, spacing: Spacing.xxs) {
-                Text("send.noDevices")
+                Text(titleKey)
                     .font(Typography.headline)
                     .foregroundStyle(.primary)
-                Text("send.noDevicesHelp")
+                Text(messageKey)
                     .font(Typography.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -306,6 +333,87 @@ private struct NearbyDevicesEmptyState: View {
         .overlay {
             RoundedRectangle.continuous(Radius.xl)
                 .strokeBorder(SemanticColor.discovery.opacity(0.18), lineWidth: 0.5)
+        }
+    }
+
+    @ViewBuilder private var icon: some View {
+        ZStack {
+            Circle()
+                .fill(SemanticColor.discoverySubtleFill)
+                .frame(width: 52, height: 52)
+
+            if state.isShowingActivity {
+                ActivityHalo(symbol: state == .emptyScanning ? "dot.radiowaves.left.and.right" : "arrow.clockwise")
+            } else {
+                Image(systemName: "dot.radiowaves.left.and.right")
+                    .font(.system(size: 22, weight: .medium))
+                    .foregroundStyle(SemanticColor.discovery)
+            }
+        }
+        .accessibilityHidden(true)
+    }
+
+    private var titleKey: LocalizedStringKey {
+        switch state {
+        case .emptyIdle:
+            return "send.noDevices"
+        case .emptyRefreshing:
+            return "send.refreshingDevices"
+        case .emptyScanning:
+            return "send.scanningDevices"
+        case .results:
+            return "send.noDevices"
+        }
+    }
+
+    private var messageKey: LocalizedStringKey {
+        switch state {
+        case .emptyIdle:
+            return "send.noDevicesHelp"
+        case .emptyRefreshing:
+            return "send.refreshingDevicesHelp"
+        case .emptyScanning:
+            return "send.scanningDevicesHelp"
+        case .results:
+            return "send.noDevicesHelp"
+        }
+    }
+}
+
+private struct ActivityHalo: View {
+    let symbol: String
+
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.appReducesMotion) private var appReduceMotion
+    private var reduceMotion: Bool { systemReduceMotion || appReduceMotion }
+
+    var body: some View {
+        ZStack {
+            if reduceMotion == false {
+                TimelineView(.animation) { context in
+                    let phase = context.date.timeIntervalSinceReferenceDate.remainder(dividingBy: 1.2) / 1.2
+                    Circle()
+                        .stroke(SemanticColor.discovery.opacity(0.28), lineWidth: 1)
+                        .frame(width: 30, height: 30)
+                        .scaleEffect(1 + phase * 0.65)
+                        .opacity(0.8 - phase * 0.65)
+                }
+            }
+
+            Image(systemName: symbol)
+                .font(.system(size: 20, weight: .medium))
+                .foregroundStyle(SemanticColor.discovery)
+                .conditionalPulse(active: reduceMotion == false)
+        }
+    }
+}
+
+private extension View {
+    @ViewBuilder func conditionalPulse(active: Bool) -> some View {
+        if active {
+            self.symbolEffect(.pulse, options: .repeating)
+        } else {
+            self
         }
     }
 }

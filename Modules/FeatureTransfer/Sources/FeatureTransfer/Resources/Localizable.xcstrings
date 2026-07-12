@@ -287,6 +287,83 @@
         }
       }
     },
+    "incomingRequest.clearSelection" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear selection"
+          }
+        }
+      }
+    },
+    "incomingRequest.fileSelectionHint" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose which files to accept from this transfer."
+          }
+        }
+      }
+    },
+    "incomingRequest.fromDevice" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "From device"
+          }
+        }
+      }
+    },
+    "incomingRequest.selectAll" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Select all"
+          }
+        }
+      }
+    },
+    "incomingRequest.selectionAll" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "All %d selected"
+          }
+        }
+      }
+    },
+    "incomingRequest.selectionNone" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No files selected"
+          }
+        }
+      }
+    },
+    "incomingRequest.selectionPartial" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%d of %d selected"
+          }
+        }
+      }
+    },
     "incomingRequest.titleFormat" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -540,6 +617,28 @@
         }
       }
     },
+    "send.scanningDevices" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Scanning for devices"
+          }
+        }
+      }
+    },
+    "send.scanningDevicesHelp" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "LocalDrop is actively scanning the network for nearby peers."
+          }
+        }
+      }
+    },
     "send.selectionTitle" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -558,6 +657,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Staged Items"
+          }
+        }
+      }
+    },
+    "send.refreshingDevices" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Refreshing nearby devices"
+          }
+        }
+      }
+    },
+    "send.refreshingDevicesHelp" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Discovery is refreshing so new peers can appear without a hard state jump."
           }
         }
       }

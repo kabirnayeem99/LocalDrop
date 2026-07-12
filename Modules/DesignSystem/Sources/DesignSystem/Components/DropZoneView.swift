@@ -51,14 +51,24 @@ public struct DropZoneView<Content: View>: View {
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.16), value: state)
     }
 
-    public init(isTargeted: Bool, systemImage: String, label: String) where Content == DropZoneLabel {
+    public init(
+        isTargeted: Bool,
+        systemImage: String,
+        acceptedSystemImage: String? = nil,
+        label: String
+    ) where Content == DropZoneLabel {
         self.state = isTargeted ? .targeted : .idle
-        self.content = DropZoneLabel(systemImage: systemImage, label: label)
+        self.content = DropZoneLabel(systemImage: systemImage, acceptedSystemImage: acceptedSystemImage, label: label)
     }
 
-    public init(state: DropZoneInteractionState, systemImage: String, label: String) where Content == DropZoneLabel {
+    public init(
+        state: DropZoneInteractionState,
+        systemImage: String,
+        acceptedSystemImage: String? = nil,
+        label: String
+    ) where Content == DropZoneLabel {
         self.state = state
-        self.content = DropZoneLabel(systemImage: systemImage, label: label)
+        self.content = DropZoneLabel(systemImage: systemImage, acceptedSystemImage: acceptedSystemImage, label: label)
     }
 
     private var scale: CGFloat {
@@ -141,6 +151,7 @@ public struct DropZoneView<Content: View>: View {
 
 public struct DropZoneLabel: View {
     private let systemImage: String
+    private let acceptedSystemImage: String?
     private let label: String
     @Environment(\.dropZoneInteractionState) private var state
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
@@ -148,16 +159,27 @@ public struct DropZoneLabel: View {
     @Environment(\.accentTheme) private var accentTheme
     private var reduceMotion: Bool { systemReduceMotion || appReduceMotion }
 
-    public init(systemImage: String, label: String) {
+    public init(systemImage: String, acceptedSystemImage: String? = nil, label: String) {
         self.systemImage = systemImage
+        self.acceptedSystemImage = acceptedSystemImage
         self.label = label
+    }
+
+    // When an accepted glyph is supplied, morph to it on accept; otherwise the
+    // symbol is unchanged and only the existing bounce/offset play.
+    private var displayedSymbol: String {
+        if state == .accepted, let acceptedSystemImage {
+            return acceptedSystemImage
+        }
+        return systemImage
     }
 
     public var body: some View {
         VStack(spacing: Spacing.xs) {
-            Image(systemName: systemImage)
+            Image(systemName: displayedSymbol)
                 .font(.system(size: 28))
                 .foregroundStyle(accentTheme.primary)
+                .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
                 .symbolEffect(.bounce, value: !reduceMotion && state == .accepted)
                 .offset(y: reduceMotion ? 0 : iconOffset)
             Text(label)

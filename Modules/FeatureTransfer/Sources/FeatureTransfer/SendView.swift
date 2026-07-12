@@ -105,6 +105,7 @@ struct SendView: View {
                 DropZoneView(
                     state: dropZoneState,
                     systemImage: "arrow.up.doc",
+                    acceptedSystemImage: "checkmark.circle.fill",
                     label: "send.dropZoneLabel"
                 )
                 .frame(minHeight: 80)

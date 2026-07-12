@@ -242,6 +242,7 @@ struct ActiveTransferProgress: Identifiable, Equatable, Sendable {
     let id: ID
     let direction: Direction
     let counterpartName: String
+    let counterpartKind: DeviceKind
     let fileName: String
     let progress: Double
     let throughput: String
@@ -253,6 +254,7 @@ struct ActiveTransferProgress: Identifiable, Equatable, Sendable {
         id: ID,
         direction: Direction,
         counterpartName: String,
+        counterpartKind: DeviceKind = .generic,
         fileName: String,
         progress: Double,
         throughput: String,
@@ -263,6 +265,7 @@ struct ActiveTransferProgress: Identifiable, Equatable, Sendable {
         self.id = id
         self.direction = direction
         self.counterpartName = counterpartName
+        self.counterpartKind = counterpartKind
         self.fileName = fileName
         self.progress = progress
         self.throughput = throughput

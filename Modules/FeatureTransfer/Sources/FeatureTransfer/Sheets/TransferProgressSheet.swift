@@ -16,10 +16,35 @@ struct TransferProgressSheet: View {
         progress.direction == .sending ? SemanticColor.sending : SemanticColor.receiving
     }
 
+    // Files always flow leading -> trailing, so the leading badge is the source:
+    // this Mac when sending, the counterpart when receiving.
+    private var flightLeadingSymbol: String {
+        progress.direction == .sending ? "laptopcomputer" : progress.counterpartKind.symbol
+    }
+    private var flightTrailingSymbol: String {
+        progress.direction == .sending ? progress.counterpartKind.symbol : "laptopcomputer"
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: Spacing.sm + 1) {
-                SpinningRingIcon(direction: progress.direction, isComplete: isComplete)
+                FileFlightView(
+                    leadingSymbol: flightLeadingSymbol,
+                    trailingSymbol: flightTrailingSymbol,
+                    isActive: !isComplete
+                )
+                .overlay(alignment: .trailing) {
+                    if isComplete {
+                        // Celebrate arrival over the destination (trailing) badge.
+                        // The +17 nudge re-centers the 74pt burst on the 40pt badge.
+                        CompletionBurst(tint: SemanticColor.success, direction: progress.direction)
+                            .frame(width: 74, height: 74)
+                            .offset(x: 17)
+                            .allowsHitTesting(false)
+                            .transition(.opacity)
+                    }
+                }
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: isComplete)
 
                 VStack(alignment: .leading, spacing: Spacing.xxs) {
                     Text(titleText)
@@ -85,80 +110,6 @@ struct TransferProgressSheet: View {
                 ? String(format: String(localized: .init("transfer.receivedFrom"), bundle: .module), progress.counterpartName)
                 : String(format: String(localized: .init("transfer.progress.receivingFrom"), bundle: .module), progress.counterpartName)
         }
-    }
-}
-
-private struct SpinningRingIcon: View {
-    let direction: ActiveTransferProgress.Direction
-    let isComplete: Bool
-    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
-    @Environment(\.appReducesMotion) private var appReduceMotion
-    private var reduceMotion: Bool { systemReduceMotion || appReduceMotion }
-    private var tint: Color {
-        if isComplete {
-            return SemanticColor.success
-        }
-        return direction == .sending ? SemanticColor.sending : SemanticColor.receiving
-    }
-    private var fill: Color {
-        if isComplete {
-            return SemanticColor.successSubtleFill
-        }
-        return direction == .sending ? SemanticColor.sendingSubtleFill : SemanticColor.receivingSubtleFill
-    }
-
-    var body: some View {
-        ZStack {
-            RoundedRectangle.continuous(Radius.xl)
-                .fill(fill)
-                .frame(width: 48, height: 48)
-                .overlay {
-                    Image(systemName: iconName)
-                        .font(.system(size: 22))
-                        .foregroundStyle(tint)
-                        .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
-                }
-
-            if !isComplete {
-                ring
-                    .frame(width: 52, height: 52)
-                    .transition(.opacity)
-            } else {
-                CompletionBurst(tint: tint, direction: direction)
-                    .frame(width: 74, height: 74)
-                    .transition(.opacity)
-
-                Circle()
-                    .stroke(tint.opacity(0.28), lineWidth: 2)
-                    .frame(width: 52, height: 52)
-                    .transition(.opacity.combined(with: .scale(scale: 0.9)))
-            }
-        }
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: isComplete)
-    }
-
-    private var iconName: String {
-        if isComplete {
-            return "checkmark.circle.fill"
-        }
-        return direction == .sending ? "paperplane.fill" : "tray.and.arrow.down.fill"
-    }
-
-    @ViewBuilder private var ring: some View {
-        if reduceMotion {
-            trimmedRing
-        } else {
-            TimelineView(.animation) { context in
-                let angle = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1) * 360
-                trimmedRing.rotationEffect(.degrees(angle))
-            }
-        }
-    }
-
-    private var trimmedRing: some View {
-        Circle()
-            .trim(from: 0, to: 0.28)
-            .stroke(tint, style: StrokeStyle(lineWidth: 2, lineCap: .round))
     }
 }
 

@@ -115,7 +115,7 @@ final class TransferFeatureStore {
         guard hasStarted == false else { return }
         hasStarted = true
         bindRuntimeStreamsIfNeeded()
-        runtimeStatusText = "Starting LocalDrop runtime…"
+        runtimeStatusText = FeatureTransferLocalization.string(forKey: "runtime.starting")
         logger.emit(
             level: .info,
             event: "app.runtime.start.requested",
@@ -129,7 +129,7 @@ final class TransferFeatureStore {
         do {
             try await runtime.start()
             isRuntimeAvailable = true
-            runtimeStatusText = "Discoverable"
+            runtimeStatusText = FeatureTransferLocalization.string(forKey: "runtime.discoverable")
             logger.emit(
                 level: .info,
                 event: "app.runtime.start.succeeded",
@@ -142,7 +142,7 @@ final class TransferFeatureStore {
             await runtime.refreshDiscovery()
         } catch {
             isRuntimeAvailable = false
-            runtimeStatusText = "Unavailable"
+            runtimeStatusText = FeatureTransferLocalization.string(forKey: "runtime.unavailable")
             recordError(event: "app.runtime.start.failed", error: error)
         }
     }
@@ -188,7 +188,9 @@ final class TransferFeatureStore {
             if shouldShowFeedback {
                 showFeedback(
                     TransferFeedback(
-                        message: scan ? "Discovery scan started" : "Discovery refreshed",
+                        message: scan
+                            ? FeatureTransferLocalization.string(forKey: "feedback.discoveryScanStarted")
+                            : FeatureTransferLocalization.string(forKey: "feedback.discoveryRefreshed"),
                         symbol: scan ? "dot.radiowaves.left.and.right" : "arrow.clockwise",
                         tone: .neutral
                     )
@@ -214,7 +216,9 @@ final class TransferFeatureStore {
         }
         showFeedback(
             TransferFeedback(
-                message: staged.count == 1 ? "File staged" : "\(staged.count) items staged",
+                message: staged.count == 1
+                    ? FeatureTransferLocalization.string(forKey: "feedback.fileStaged")
+                    : FeatureTransferLocalization.format("feedback.itemsStaged", staged.count),
                 symbol: "checkmark.circle.fill",
                 tone: .success
             )
@@ -267,7 +271,7 @@ final class TransferFeatureStore {
             attributes: [.string("transfer.request_id", request.id)]
         )
         showFeedback(
-            TransferFeedback(message: "Transfer declined", symbol: "xmark.circle.fill", tone: .destructive)
+            TransferFeedback(message: FeatureTransferLocalization.string(forKey: "feedback.transferDeclined"), symbol: "xmark.circle.fill", tone: .destructive)
         )
         for file in request.files {
             appendHistoryEntry(
@@ -297,7 +301,7 @@ final class TransferFeatureStore {
             attributes: [.string("transfer.request_id", request.id)]
         )
         showFeedback(
-            TransferFeedback(message: "Transfer accepted", symbol: "checkmark.circle.fill", tone: .success)
+            TransferFeedback(message: FeatureTransferLocalization.string(forKey: "feedback.transferAccepted"), symbol: "checkmark.circle.fill", tone: .success)
         )
         Task {
             try? await runtime.respondToIncomingRequest(.acceptAll(requestID: request.id))
@@ -319,7 +323,9 @@ final class TransferFeatureStore {
         )
         showFeedback(
             TransferFeedback(
-                message: acceptedCount == request.files.count ? "Transfer accepted" : "\(acceptedCount) files accepted",
+                message: acceptedCount == request.files.count
+                    ? FeatureTransferLocalization.string(forKey: "feedback.transferAccepted")
+                    : FeatureTransferLocalization.format("feedback.filesAccepted", acceptedCount),
                 symbol: "checkmark.circle.fill",
                 tone: .success
             )
@@ -344,7 +350,7 @@ final class TransferFeatureStore {
             attributes: [.string("transfer.session_id", activeTransfer.id)]
         )
         showFeedback(
-            TransferFeedback(message: "Transfer canceled", symbol: "xmark.circle.fill", tone: .destructive)
+            TransferFeedback(message: FeatureTransferLocalization.string(forKey: "feedback.transferCanceled"), symbol: "xmark.circle.fill", tone: .destructive)
         )
         Task {
             try? await runtime.cancelActiveTransfer(activeTransfer.id)
@@ -375,7 +381,7 @@ final class TransferFeatureStore {
         guard FileManager.default.fileExists(atPath: url.path) else {
             showFeedback(
                 TransferFeedback(
-                    message: "File no longer available",
+                    message: FeatureTransferLocalization.string(forKey: "feedback.fileUnavailable"),
                     symbol: "exclamationmark.triangle.fill",
                     tone: .destructive
                 )
@@ -412,7 +418,7 @@ final class TransferFeatureStore {
             recordError(event: "settings.launch_at_login.failed", error: error)
             showFeedback(
                 TransferFeedback(
-                    message: "Couldn't update Launch at Login",
+                    message: FeatureTransferLocalization.string(forKey: "feedback.launchAtLoginFailed"),
                     symbol: "exclamationmark.triangle.fill",
                     tone: .destructive
                 )
@@ -439,7 +445,7 @@ final class TransferFeatureStore {
             attributes: settingsAttributes()
         )
         showFeedback(
-            TransferFeedback(message: "Settings saved", symbol: "checkmark.circle.fill", tone: .success)
+            TransferFeedback(message: FeatureTransferLocalization.string(forKey: "feedback.settingsSaved"), symbol: "checkmark.circle.fill", tone: .success)
         )
         Task {
             do {
@@ -453,7 +459,7 @@ final class TransferFeatureStore {
             } catch {
                 recordError(event: "settings.runtime_update.failed", error: error)
                 showFeedback(
-                    TransferFeedback(message: "Settings could not be applied", symbol: "exclamationmark.triangle.fill", tone: .destructive)
+                    TransferFeedback(message: FeatureTransferLocalization.string(forKey: "feedback.settingsFailed"), symbol: "exclamationmark.triangle.fill", tone: .destructive)
                 )
             }
         }
@@ -463,7 +469,7 @@ final class TransferFeatureStore {
         saveLocation = url.path
         persistSettings()
         showFeedback(
-            TransferFeedback(message: "Save location changed", symbol: "folder.fill", tone: .success)
+            TransferFeedback(message: FeatureTransferLocalization.string(forKey: "feedback.saveLocationChanged"), symbol: "folder.fill", tone: .success)
         )
     }
 
@@ -476,7 +482,7 @@ final class TransferFeatureStore {
         logger.emit(level: .notice, event: "settings.persist.requested", scope: "TransferFeatureStore", attributes: settingsAttributes())
         persistSettings()
         showFeedback(
-            TransferFeedback(message: "Incoming PIN regenerated", symbol: "number.circle.fill", tone: .success)
+            TransferFeedback(message: FeatureTransferLocalization.string(forKey: "feedback.incomingPINRegenerated"), symbol: "number.circle.fill", tone: .success)
         )
     }
 
@@ -493,7 +499,7 @@ final class TransferFeatureStore {
             )
             showFeedback(
                 TransferFeedback(
-                    message: "Incoming PIN must be exactly \(TransferProtocolSettings.incomingPINLength) digits",
+                    message: FeatureTransferLocalization.format("settings.incomingPINValidation", TransferProtocolSettings.incomingPINLength),
                     symbol: "exclamationmark.triangle.fill",
                     tone: .destructive
                 )
@@ -504,7 +510,7 @@ final class TransferFeatureStore {
         incomingPIN = normalized
         persistSettings()
         showFeedback(
-            TransferFeedback(message: "Incoming PIN updated", symbol: "number.circle.fill", tone: .success)
+            TransferFeedback(message: FeatureTransferLocalization.string(forKey: "feedback.incomingPINUpdated"), symbol: "number.circle.fill", tone: .success)
         )
         return true
     }
@@ -554,7 +560,9 @@ final class TransferFeatureStore {
                         )
                         self.showFeedback(
                             TransferFeedback(
-                                message: "\(progress.fileName) \(progress.direction == .sending ? "sent" : "received")",
+                                message: progress.direction == .sending
+                                    ? FeatureTransferLocalization.format("feedback.fileSent", progress.fileName)
+                                    : FeatureTransferLocalization.format("feedback.fileReceived", progress.fileName),
                                 symbol: "checkmark.circle.fill",
                                 tone: .success
                             )
@@ -655,10 +663,16 @@ final class TransferFeatureStore {
     private static func makeStagedItem(url: URL) -> StagedTransferItem {
         let values = try? url.resourceValues(forKeys: [.fileSizeKey, .isDirectoryKey])
         let byteCount = values?.fileSize.map(Int64.init)
-        let itemCountLabel = (values?.isDirectory == true) ? "folder ready to send" : "ready to send"
+        let itemCountLabel = (values?.isDirectory == true)
+            ? FeatureTransferLocalization.string(forKey: "send.stagedFolderReady")
+            : FeatureTransferLocalization.string(forKey: "send.stagedFileReady")
         let subtitle: String
         if let byteCount {
-            subtitle = "\(ByteCountFormatter.string(fromByteCount: byteCount, countStyle: .file)) · \(itemCountLabel)"
+            subtitle = FeatureTransferLocalization.format(
+                "send.stagedSubtitleFormat",
+                ByteCountFormatter.string(fromByteCount: byteCount, countStyle: .file),
+                itemCountLabel
+            )
         } else {
             subtitle = itemCountLabel
         }

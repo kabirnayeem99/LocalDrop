@@ -7,6 +7,7 @@ struct DeviceCardView: View {
 
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     @Environment(\.appReducesMotion) private var appReduceMotion
+    @Environment(\.accentTheme) private var accentTheme
     private var reduceMotion: Bool { systemReduceMotion || appReduceMotion }
     @State private var isHovering = false
     @State private var showsAvailabilityPulse = false
@@ -16,19 +17,19 @@ struct DeviceCardView: View {
             HStack(spacing: Spacing.sm) {
                 ZStack(alignment: .topTrailing) {
                     RoundedRectangle.continuous(Radius.xl)
-                        .stroke(AccentColor.primary.opacity(0.26), lineWidth: 1.5)
+                        .stroke(accentTheme.primary.opacity(0.26), lineWidth: 1.5)
                         .frame(width: 44, height: 44)
                         .scaleEffect(reduceMotion || showsAvailabilityPulse ? 1.32 : 1)
                         .opacity(reduceMotion || showsAvailabilityPulse ? 0 : 0.22)
                         .allowsHitTesting(false)
 
                     RoundedRectangle.continuous(Radius.xl)
-                        .fill(AccentColor.primarySubtleFill)
+                        .fill(accentTheme.primarySubtleFill)
                         .frame(width: 44, height: 44)
                         .overlay {
                             Image(systemName: device.kind.symbol)
                                 .font(.system(size: 22, weight: .regular))
-                                .foregroundStyle(AccentColor.primary)
+                                .foregroundStyle(accentTheme.primary)
                         }
                 }
 
@@ -47,7 +48,7 @@ struct DeviceCardView: View {
                 // Send affordance — fades/slides in only while hovering.
                 Image(systemName: "paperplane.fill")
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(AccentColor.primary)
+                    .foregroundStyle(accentTheme.primary)
                     .opacity(isHovering ? 1 : 0)
                     .offset(x: reduceMotion ? 0 : (isHovering ? 0 : 6))
             }
@@ -58,7 +59,7 @@ struct DeviceCardView: View {
             .overlay {
                 RoundedRectangle.continuous(Radius.xl)
                     .strokeBorder(
-                        isHovering ? AccentColor.primary.opacity(0.45) : Color(nsColor: .separatorColor),
+                        isHovering ? accentTheme.primary.opacity(0.45) : Color(nsColor: .separatorColor),
                         lineWidth: isHovering ? 1 : 0.5
                     )
             }

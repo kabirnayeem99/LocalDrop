@@ -36,6 +36,19 @@ enum SendEntryKind: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    var label: String {
+        switch self {
+        case .file:
+            return FeatureTransferLocalization.string(forKey: "sendEntryKind.file")
+        case .folder:
+            return FeatureTransferLocalization.string(forKey: "sendEntryKind.folder")
+        case .text:
+            return FeatureTransferLocalization.string(forKey: "sendEntryKind.text")
+        case .paste:
+            return FeatureTransferLocalization.string(forKey: "sendEntryKind.paste")
+        }
+    }
+
     var symbol: String {
         switch self {
         case .file:

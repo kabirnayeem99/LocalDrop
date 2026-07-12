@@ -4,6 +4,7 @@ import DesignSystem
 struct RootView: View {
     @Bindable private var store: TransferFeatureStore
     private let sendEntryActions: SendEntryActions
+    @Environment(\.accentTheme) private var accentTheme
 
     init(store: TransferFeatureStore, sendEntryActions: SendEntryActions = .noop) {
         self._store = Bindable(store)
@@ -20,7 +21,7 @@ struct RootView: View {
         }
         .environment(\.appReducesMotion, store.reduceMotion)
         .applyingLanguageOverride(store.language)
-        .tint(store.accentColor.resolvedColor)
+        .tint(store.accentColor.theme.primary)
         .preferredColorScheme(store.appearance.colorScheme)
         .overlay(alignment: .top) {
             if let feedback = store.feedback {
@@ -49,7 +50,7 @@ struct RootView: View {
 
     private var sidebar: some View {
         List(selection: $store.screen) {
-            Section("Transfer") {
+            Section("sidebar.section.transfer") {
                 ForEach(Screen.allCases) { screen in
                     SidebarRow(screen: screen, badgeCount: badgeCount(for: screen))
                         .tag(screen)
@@ -74,13 +75,13 @@ struct RootView: View {
     private var sidebarHeader: some View {
         HStack(spacing: Spacing.sm - 1) {
             RoundedRectangle.continuous(Radius.md)
-                .fill(AccentColor.primary)
+                .fill(accentTheme.primary)
                 .frame(width: 30, height: 30)
                 .overlay {
                     BrandMark(variant: .monoLight)
                         .frame(width: 17, height: 17)
                 }
-            Text("LocalDrop")
+            Text("root.localDrop")
                 .font(Typography.title3.weight(.bold))
                 .foregroundStyle(.primary)
             Spacer()
@@ -115,13 +116,13 @@ struct RootView: View {
             Button {
                 store.screen = .history
             } label: {
-                Label("History", systemImage: "clock.arrow.circlepath")
+                Label("root.history", systemImage: "clock.arrow.circlepath")
             }
 
             Button {
                 store.screen = .settings
             } label: {
-                Label("Settings", systemImage: "gearshape")
+                Label("root.settings", systemImage: "gearshape")
             }
         }
     }
@@ -176,7 +177,7 @@ private struct SidebarRow: View {
                         .foregroundStyle(.white)
                         .frame(minWidth: 16, minHeight: 16)
                         .background(SemanticColor.pending, in: Capsule())
-                        .accessibilityLabel("\(badgeCount) active item")
+                        .accessibilityLabel(Text(String(format: String(localized: .init("root.activeItem"), bundle: .module), badgeCount)))
                 }
             }
         } icon: {
@@ -196,7 +197,7 @@ private struct RefreshToolbarButton: View {
     var body: some View {
         Button(action: action) {
             Label {
-                Text("Refresh")
+                Text("root.refresh")
             } icon: {
                 if isRefreshing, !reduceMotion {
                     TimelineView(.animation) { context in
@@ -208,7 +209,7 @@ private struct RefreshToolbarButton: View {
                 }
             }
         }
-        .help(isRefreshing ? "Refreshing discovery" : "Refresh discovery")
+        .help(isRefreshing ? "root.refreshingDiscovery" : "root.refresh")
         .disabled(isRefreshing)
     }
 }
@@ -234,6 +235,7 @@ private struct ThisDeviceChip: View {
 
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     @Environment(\.appReducesMotion) private var appReduceMotion
+    @Environment(\.accentTheme) private var accentTheme
     private var reduceMotion: Bool { systemReduceMotion || appReduceMotion }
 
     var body: some View {
@@ -244,7 +246,7 @@ private struct ThisDeviceChip: View {
                 .overlay {
                     Image(systemName: "laptopcomputer")
                         .font(.system(size: 17))
-                        .foregroundStyle(AccentColor.primary)
+                        .foregroundStyle(accentTheme.primary)
                 }
                 .overlay {
                     RoundedRectangle.continuous(Radius.md)
@@ -268,12 +270,12 @@ private struct ThisDeviceChip: View {
         }
         .padding(.horizontal, Spacing.xs + Spacing.xxs)
         .padding(.vertical, Spacing.xs)
-        .background(AccentColor.primarySubtleFill.opacity(0.6), in: RoundedRectangle.continuous(Radius.lg))
+        .background(accentTheme.primarySubtleFill.opacity(0.6), in: RoundedRectangle.continuous(Radius.lg))
         .overlay {
             RoundedRectangle.continuous(Radius.lg)
                 .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5)
         }
-        .help("Runtime status: \(statusText)")
+        .help(Text(String(format: String(localized: .init("thisDevice.statusHelp"), bundle: .module), statusText)))
     }
 }
 
@@ -293,7 +295,7 @@ private struct RuntimeStatusDot: View {
                 .fill(isAvailable ? SemanticColor.success : SemanticColor.pending)
                 .frame(width: 6, height: 6)
         }
-        .accessibilityLabel(isAvailable ? "Runtime available" : "Runtime unavailable")
+        .accessibilityLabel(isAvailable ? "thisDevice.runtimeAvailable" : "thisDevice.runtimeUnavailable")
     }
 }
 

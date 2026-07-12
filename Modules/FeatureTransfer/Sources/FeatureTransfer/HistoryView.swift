@@ -11,11 +11,11 @@ struct HistoryView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("Recent transfers")
+                Text("history.title")
                     .font(Typography.headline)
                     .foregroundStyle(.primary)
                 Spacer()
-                Button("Clear all") { showsClearConfirmation = true }
+                Button("history.clearAll") { showsClearConfirmation = true }
                     .buttonStyle(.plain)
                     .font(Typography.callout.weight(.medium))
                     .foregroundStyle(store.historyEntries.isEmpty ? .secondary : SemanticColor.destructive)
@@ -42,14 +42,14 @@ struct HistoryView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: store.historyEntries.isEmpty)
         .confirmationDialog(
-            "Clear transfer history?",
+            "history.clearConfirmTitle",
             isPresented: $showsClearConfirmation,
             titleVisibility: .visible
         ) {
-            Button("Clear all", role: .destructive) {
+            Button("history.clearAll", role: .destructive) {
                 store.clearHistory()
             }
-            Button("Cancel", role: .cancel) {}
+            Button("general.cancel", role: .cancel) {}
         } message: {
             Text("This removes the recent transfer list from this device.")
         }
@@ -68,10 +68,10 @@ private struct HistoryEmptyState: View {
                     .foregroundStyle(SemanticColor.discovery)
             }
 
-            Text("No recent transfers")
-                .font(Typography.headline)
-                .foregroundStyle(.primary)
-            Text("Completed and declined transfers will appear here.")
+                Text("history.noTransfers")
+                    .font(Typography.headline)
+                    .foregroundStyle(.primary)
+                Text("history.noTransfersHelp")
                 .font(Typography.callout)
                 .foregroundStyle(.secondary)
         }

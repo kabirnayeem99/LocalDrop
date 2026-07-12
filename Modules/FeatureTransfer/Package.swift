@@ -3,6 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "FeatureTransfer",
+    defaultLocalization: "en",
     platforms: [.macOS(.v14)],
     products: [
         .library(name: "FeatureTransfer", targets: ["FeatureTransfer"])
@@ -15,7 +16,10 @@ let package = Package(
     targets: [
         .target(
             name: "FeatureTransfer",
-            dependencies: ["AppLogging", "LocalSendKit", "DesignSystem"]
+            dependencies: ["AppLogging", "LocalSendKit", "DesignSystem"],
+            resources: [
+                .process("Resources")
+            ]
         ),
         .testTarget(name: "FeatureTransferTests", dependencies: ["FeatureTransfer", "AppLogging"])
     ]

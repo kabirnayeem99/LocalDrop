@@ -17,36 +17,37 @@ struct SettingsView: View {
     @State private var pinValidationMessage: String?
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     @Environment(\.appReducesMotion) private var appReduceMotion
+    @Environment(\.accentTheme) private var accentTheme
     private var reduceMotion: Bool { systemReduceMotion || appReduceMotion }
 
     var body: some View {
         Form {
-            Section("General") {
-                Picker("Appearance", selection: $store.appearance) {
+            Section("settings.section.general") {
+                Picker("settings.appearance", selection: $store.appearance) {
                     ForEach(AppearanceSetting.allCases) { Text($0.label).tag($0) }
                 }
                 .pickerStyle(.menu)
 
-                LabeledContent("Accent color") {
+                LabeledContent("settings.accentColor") {
                     AccentSwatchRow(selection: $store.accentColor)
                 }
 
-                Picker("Language", selection: $store.language) {
+                Picker("settings.language", selection: $store.language) {
                     ForEach(LanguageSetting.allCases) { Text($0.label).tag($0) }
                 }
                 .pickerStyle(.menu)
 
-                Toggle("Minimize to menu bar on close", isOn: $store.minimizeToMenuBar)
-                Toggle("Launch at login", isOn: $store.launchAtLogin)
-                Toggle("Reduce motion", isOn: $store.reduceMotion)
+                Toggle("settings.minimizeToMenuBar", isOn: $store.minimizeToMenuBar)
+                Toggle("settings.launchAtLogin", isOn: $store.launchAtLogin)
+                Toggle("settings.reduceMotion", isOn: $store.reduceMotion)
             }
 
-            Section("Receiving") {
+            Section("settings.section.receiving") {
                 LabeledContent {
-                    Button("Choose…") { chooseSaveLocation() }
+                    Button("settings.chooseSaveLocation") { chooseSaveLocation() }
                 } label: {
                     VStack(alignment: .leading, spacing: Spacing.xxs) {
-                        Text("Save location")
+                        Text("settings.saveLocation")
                         Text(store.saveLocation)
                             .font(Typography.subheadline)
                             .foregroundStyle(.secondary)
@@ -59,27 +60,27 @@ struct SettingsView: View {
                     }
                 }
 
-                Toggle("Require PIN for incoming", isOn: $store.requirePIN)
+                Toggle("settings.requirePIN", isOn: $store.requirePIN)
                     .accessibilityIdentifier("settings-require-pin-toggle")
-                    .help("Adds a PIN check before accepting incoming transfers.")
-                LabeledContent("Incoming PIN") {
+                    .help("settings.requirePINHelp")
+                LabeledContent("settings.incomingPIN") {
                     VStack(alignment: .trailing, spacing: Spacing.xxs) {
                         HStack(spacing: Spacing.xs) {
                             incomingPINField
 
-                            Button(showsIncomingPIN ? "Hide" : "Show") {
+                            Button(showsIncomingPIN ? "settings.hide" : "settings.show") {
                                 showsIncomingPIN.toggle()
                             }
                             .disabled(store.requirePIN == false)
                             .accessibilityIdentifier("settings-incoming-pin-visibility")
 
-                            Button("Apply") {
+                            Button("settings.apply") {
                                 applyIncomingPIN()
                             }
                             .disabled(canApplyIncomingPIN == false)
                             .accessibilityIdentifier("settings-incoming-pin-apply")
 
-                            Button("Regenerate") {
+                            Button("settings.regenerate") {
                                 store.regenerateIncomingPIN()
                                 pinDraft = store.incomingPIN
                                 pinValidationMessage = nil
@@ -88,39 +89,39 @@ struct SettingsView: View {
                             .accessibilityIdentifier("settings-incoming-pin-regenerate")
                         }
 
-                        Text(pinValidationMessage ?? "Use a 6-digit PIN for nearby senders.")
+                        Text(pinValidationMessage ?? String(localized: .init("settings.incomingPINHint"), bundle: .module))
                             .font(Typography.caption1)
                             .foregroundStyle(pinValidationMessage == nil ? .secondary : SemanticColor.pending)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
-                Toggle("Auto-accept from favorites", isOn: $store.autoAcceptFavorites)
-                    .help("Automatically accepts transfers only from trusted favorite devices.")
+                Toggle("settings.autoAcceptFavorites", isOn: $store.autoAcceptFavorites)
+                    .help("settings.autoAcceptFavoritesHelp")
             }
 
-            Section("Network") {
-                LabeledContent("Device name", value: store.deviceName)
-                LabeledContent("Port") {
+            Section("settings.section.network") {
+                LabeledContent("settings.deviceName", value: store.deviceName)
+                LabeledContent("settings.port") {
                     Text(store.port)
                         .foregroundStyle(.secondary)
                         .monospacedStat()
                 }
-                Toggle("Allow downloads", isOn: $store.allowDownloads)
-                    .help("Allows peers to fetch files exposed by this device.")
-                Toggle(TransferSecurityCopy.httpsToggleTitle, isOn: $store.useHTTPS)
-                    .help(TransferSecurityCopy.httpsToggleHelp)
+                Toggle("settings.allowDownloads", isOn: $store.allowDownloads)
+                    .help("settings.allowDownloadsHelp")
+                Toggle("settings.useHTTPS", isOn: $store.useHTTPS)
+                    .help("settings.useHTTPSHelp")
             }
         }
         .formStyle(.grouped)
-        .tint(AccentColor.primary)
+        .tint(accentTheme.primary)
         .onAppear {
             pinDraft = store.incomingPIN
         }
         .alert(item: $securityDialog) { dialog in
             Alert(
-                title: Text("Security setting changed"),
+                title: Text("settings.securityChanged"),
                 message: Text(dialog.message),
-                dismissButton: .default(Text("OK"))
+                dismissButton: .default(Text("settings.ok"))
             )
         }
         .onChange(of: store.appearance) { _, _ in store.persistSettings() }
@@ -160,20 +161,22 @@ struct SettingsView: View {
 
     @ViewBuilder private var incomingPINField: some View {
         if showsIncomingPIN {
-            TextField("6 digits", text: $pinDraft)
+            TextField("settings.incomingPINPlaceholder", text: $pinDraft)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 110)
                 .monospaced()
                 .disabled(store.requirePIN == false)
                 .accessibilityIdentifier("settings-incoming-pin-field")
+                .environment(\.layoutDirection, .leftToRight)
                 .onSubmit { applyIncomingPIN() }
         } else {
-            SecureField("6 digits", text: $pinDraft)
+            SecureField("settings.incomingPINPlaceholder", text: $pinDraft)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 110)
                 .monospaced()
                 .disabled(store.requirePIN == false)
                 .accessibilityIdentifier("settings-incoming-pin-field")
+                .environment(\.layoutDirection, .leftToRight)
                 .onSubmit { applyIncomingPIN() }
         }
     }
@@ -211,7 +214,10 @@ struct SettingsView: View {
     private func applyIncomingPIN() {
         guard store.requirePIN else { return }
         guard let normalized = normalizedPinDraft else {
-            pinValidationMessage = "PIN must be exactly \(TransferProtocolSettings.incomingPINLength) digits."
+            pinValidationMessage = String(
+                format: String(localized: .init("settings.incomingPINValidation"), bundle: .module),
+                TransferProtocolSettings.incomingPINLength
+            )
             return
         }
         if store.updateIncomingPIN(normalized) {
@@ -232,7 +238,7 @@ private struct AccentSwatchRow: View {
                     selection = accent
                 } label: {
                     Circle()
-                        .fill(accent.resolvedColor)
+                        .fill(accent.theme.primary)
                         .frame(width: 22, height: 22)
                         .overlay {
                             if selection == accent {
@@ -244,7 +250,7 @@ private struct AccentSwatchRow: View {
                         .overlay {
                             Circle()
                                 .strokeBorder(
-                                    selection == accent || hovering == accent ? accent.resolvedColor : Color(nsColor: .separatorColor),
+                                    selection == accent || hovering == accent ? accent.theme.primary : Color(nsColor: .separatorColor),
                                     lineWidth: selection == accent ? 2 : 1
                                 )
                                 .padding(selection == accent ? -4 : -2)
@@ -271,14 +277,14 @@ private enum SecurityDialog: Identifiable {
         }
     }
 
-    var message: String {
+    var message: LocalizedStringKey {
         switch self {
         case .requirePIN:
-            return "Incoming transfers will require a PIN before files are accepted."
+            return "settings.requirePINMessage"
         case .allowDownloads:
-            return "Nearby devices may request files that this device exposes through the transfer runtime."
+            return "settings.allowDownloadsMessage"
         case .httpsDisabled:
-            return TransferSecurityCopy.httpsDisabledMessage
+            return "settings.httpsDisabledMessage"
         }
     }
 }

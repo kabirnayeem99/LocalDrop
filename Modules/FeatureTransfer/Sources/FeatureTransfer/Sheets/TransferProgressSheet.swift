@@ -42,9 +42,9 @@ struct TransferProgressSheet: View {
                 .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: normalizedProgress)
 
             HStack {
-                Text("\(percent)% complete")
+                Text(String(format: String(localized: .init("transfer.progress.percentComplete"), bundle: .module), percent))
                 Spacer()
-                Text(isComplete ? "Done" : progress.etaDescription)
+                Text(isComplete ? "transfer.progress.done" : progress.etaDescription)
             }
             .font(Typography.subheadline)
             .foregroundStyle(.secondary)
@@ -53,7 +53,7 @@ struct TransferProgressSheet: View {
             .padding(.top, Spacing.xs)
 
             if isComplete {
-                Label("Transfer complete", systemImage: "checkmark.circle.fill")
+                Label("transfer.progress.complete", systemImage: "checkmark.circle.fill")
                     .font(Typography.callout.weight(.semibold))
                     .foregroundStyle(SemanticColor.success)
                     .frame(maxWidth: .infinity)
@@ -61,7 +61,7 @@ struct TransferProgressSheet: View {
                     .transition(.opacity.combined(with: .scale(scale: 0.96)))
             } else {
                 Button(role: .destructive, action: onCancel) {
-                    Text("Cancel transfer").frame(maxWidth: .infinity)
+                    Text("general.cancel").frame(maxWidth: .infinity)
                 }
                 .controlSize(.large)
                 .buttonStyle(.bordered)
@@ -77,9 +77,13 @@ struct TransferProgressSheet: View {
     private var titleText: String {
         switch progress.direction {
         case .sending:
-            return isComplete ? "Sent to \(progress.counterpartName)" : "Sending to \(progress.counterpartName)"
+            return isComplete
+                ? String(format: String(localized: .init("transfer.sentTo"), bundle: .module), progress.counterpartName)
+                : String(format: String(localized: .init("transfer.progress.sendingTo"), bundle: .module), progress.counterpartName)
         case .receiving:
-            return isComplete ? "Received from \(progress.counterpartName)" : "Receiving from \(progress.counterpartName)"
+            return isComplete
+                ? String(format: String(localized: .init("transfer.receivedFrom"), bundle: .module), progress.counterpartName)
+                : String(format: String(localized: .init("transfer.progress.receivingFrom"), bundle: .module), progress.counterpartName)
         }
     }
 }

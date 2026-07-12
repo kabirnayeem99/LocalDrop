@@ -11,6 +11,7 @@ public struct DropZoneView<Content: View>: View {
     private let content: Content
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     @Environment(\.appReducesMotion) private var appReduceMotion
+    @Environment(\.accentTheme) private var accentTheme
     private var reduceMotion: Bool { systemReduceMotion || appReduceMotion }
 
     // isTargeted is rendered but not owned here — the Send screen wires the
@@ -37,7 +38,7 @@ public struct DropZoneView<Content: View>: View {
             }
             .background {
                 RoundedRectangle(cornerRadius: Radius.lg, style: .continuous)
-                    .fill(AccentColor.primarySubtleFill.opacity(fillOpacity))
+                    .fill(accentTheme.primarySubtleFill.opacity(fillOpacity))
             }
             .overlay {
                 RoundedRectangle(cornerRadius: Radius.lg, style: .continuous)
@@ -96,11 +97,11 @@ public struct DropZoneView<Content: View>: View {
     private var borderColor: Color {
         switch state {
         case .idle:
-            return AccentColor.primary.opacity(0.5)
+            return accentTheme.primary.opacity(0.5)
         case .targeted:
-            return AccentColor.primary.opacity(0.9)
+            return accentTheme.primary.opacity(0.9)
         case .accepted:
-            return AccentColor.primary
+            return accentTheme.primary
         }
     }
 
@@ -120,9 +121,9 @@ public struct DropZoneView<Content: View>: View {
         case .idle:
             return .clear
         case .targeted:
-            return AccentColor.primary.opacity(0.16)
+            return accentTheme.primary.opacity(0.16)
         case .accepted:
-            return AccentColor.primary.opacity(0.22)
+            return accentTheme.primary.opacity(0.22)
         }
     }
 
@@ -144,6 +145,7 @@ public struct DropZoneLabel: View {
     @Environment(\.dropZoneInteractionState) private var state
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     @Environment(\.appReducesMotion) private var appReduceMotion
+    @Environment(\.accentTheme) private var accentTheme
     private var reduceMotion: Bool { systemReduceMotion || appReduceMotion }
 
     public init(systemImage: String, label: String) {
@@ -155,7 +157,7 @@ public struct DropZoneLabel: View {
         VStack(spacing: Spacing.xs) {
             Image(systemName: systemImage)
                 .font(.system(size: 28))
-                .foregroundStyle(AccentColor.primary)
+                .foregroundStyle(accentTheme.primary)
                 .symbolEffect(.bounce, value: !reduceMotion && state == .accepted)
                 .offset(y: reduceMotion ? 0 : iconOffset)
             Text(label)

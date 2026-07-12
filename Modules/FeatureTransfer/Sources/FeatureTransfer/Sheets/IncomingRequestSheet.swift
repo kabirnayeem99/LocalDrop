@@ -9,6 +9,7 @@ struct IncomingRequestSheet: View {
 
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     @Environment(\.appReducesMotion) private var appReduceMotion
+    @Environment(\.accentTheme) private var accentTheme
     @State private var selectedFileIDs: Set<String> = []
     @State private var appeared = false
     private var reduceMotion: Bool { systemReduceMotion || appReduceMotion }
@@ -17,18 +18,18 @@ struct IncomingRequestSheet: View {
         VStack(spacing: 0) {
             VStack(spacing: Spacing.xxs) {
                 RoundedRectangle.continuous(Radius.xxl)
-                    .fill(AccentColor.primarySubtleFill)
+                    .fill(accentTheme.primarySubtleFill)
                     .frame(width: 60, height: 60)
                     .overlay {
                         Image(systemName: request.sourceKind.symbol)
                             .font(.system(size: 28, weight: .regular))
-                            .foregroundStyle(AccentColor.primary)
+                            .foregroundStyle(accentTheme.primary)
                     }
                     .scaleEffect(appeared && !reduceMotion ? 1.04 : 1)
                     .animation(reduceMotion ? nil : .easeOut(duration: 0.28), value: appeared)
                     .padding(.bottom, Spacing.sm - Spacing.xxs)
 
-                Text("\(request.deviceName) wants to send")
+                Text(String(format: String(localized: .init("incomingRequest.titleFormat"), bundle: .module), request.deviceName))
                     .font(Typography.title3.weight(.bold))
                     .foregroundStyle(.primary)
                     .multilineTextAlignment(.center)
@@ -46,11 +47,11 @@ struct IncomingRequestSheet: View {
                         HStack(spacing: Spacing.xs + Spacing.xxs) {
                             Image(systemName: selectedFileIDs.contains(file.id) ? "checkmark.circle.fill" : "circle")
                                 .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(selectedFileIDs.contains(file.id) ? AccentColor.primary : .secondary)
+                                .foregroundStyle(selectedFileIDs.contains(file.id) ? accentTheme.primary : .secondary)
                                 .frame(width: 20)
                             Image(systemName: file.symbol)
                                 .font(.system(size: 15))
-                                .foregroundStyle(AccentColor.primary)
+                                .foregroundStyle(accentTheme.primary)
                                 .frame(width: 20)
                             Text(file.name)
                                 .font(Typography.body)
@@ -85,7 +86,7 @@ struct IncomingRequestSheet: View {
 
             HStack(spacing: Spacing.xs + Spacing.xxs) {
                 Button(action: onDecline) {
-                    Text("Decline").frame(maxWidth: .infinity)
+                    Text("incomingRequest.decline").frame(maxWidth: .infinity)
                 }
                 .controlSize(.large)
                 .buttonStyle(.bordered)
@@ -95,7 +96,7 @@ struct IncomingRequestSheet: View {
                 }
                 .controlSize(.large)
                 .buttonStyle(.borderedProminent)
-                .tint(AccentColor.primary)
+                .tint(accentTheme.primary)
                 .disabled(request.files.isEmpty == false && selectedFileIDs.isEmpty)
             }
             .padding(.top, Spacing.md + 2)
@@ -112,8 +113,10 @@ struct IncomingRequestSheet: View {
     }
 
     private var acceptTitle: String {
-        guard request.files.isEmpty == false else { return "Accept" }
-        return selectedFileIDs.count == request.files.count ? "Accept" : "Accept selected"
+        guard request.files.isEmpty == false else { return String(localized: .init("incomingRequest.accept"), bundle: .module) }
+        return selectedFileIDs.count == request.files.count
+            ? String(localized: .init("incomingRequest.accept"), bundle: .module)
+            : String(localized: .init("incomingRequest.acceptSelected"), bundle: .module)
     }
 
     private func toggleSelection(_ id: String) {

@@ -96,7 +96,9 @@ struct NearbyPeerItem: Identifiable, Hashable, Sendable {
             parts.append("#\(port)")
         }
         if parts.isEmpty {
-            return info.download ? "Ready to receive" : "Nearby"
+            return info.download
+                ? FeatureTransferLocalization.string(forKey: "device.readyToReceive")
+                : FeatureTransferLocalization.string(forKey: "device.nearby")
         }
         return parts.joined(separator: " · ")
     }
@@ -156,7 +158,9 @@ struct StagedTransferItem: Identifiable, Equatable, Sendable {
 
 extension Collection where Element == StagedTransferItem {
     var stagedItemCountLabel: String {
-        count == 1 ? "1 item" : "\(count) items"
+        count == 1
+            ? FeatureTransferLocalization.string(forKey: "transfer.stagedItem")
+            : FeatureTransferLocalization.format("transfer.stagedItems", count)
     }
 
     var stagedTotalByteCount: Int64? {
@@ -172,7 +176,7 @@ extension Collection where Element == StagedTransferItem {
 
     var stagedBatchSummaryLabel: String {
         guard let stagedTotalSizeLabel else { return stagedItemCountLabel }
-        return "\(stagedItemCountLabel) staged · \(stagedTotalSizeLabel)"
+        return FeatureTransferLocalization.format("transfer.stagedSummary", stagedItemCountLabel, stagedTotalSizeLabel)
     }
 }
 
@@ -226,10 +230,10 @@ enum TransferOutcome: String, Equatable, Codable, Sendable {
     case completed
     case declined
 
-    var label: String {
+    var label: LocalizedStringKey {
         switch self {
-        case .completed: "Completed"
-        case .declined: "Declined"
+        case .completed: "transfer.outcome.completed"
+        case .declined: "transfer.outcome.declined"
         }
     }
 
@@ -272,7 +276,9 @@ struct HistoryEntry: Identifiable, Codable, Sendable {
     }
 
     var subtitle: String {
-        let verb = direction == .received ? "Received from" : "Sent to"
+        let verb = direction == .received
+            ? FeatureTransferLocalization.string(forKey: "transfer.receivedFrom")
+            : FeatureTransferLocalization.string(forKey: "transfer.sentTo")
         return "\(verb) \(counterpart) · \(size)"
     }
 
@@ -288,10 +294,11 @@ struct HistoryEntry: Identifiable, Codable, Sendable {
         now: Date = Date()
     ) -> String {
         if calendar.isDateInToday(date) {
-            return "Today, \(date.formatted(date: .omitted, time: .shortened))"
+            let today = FeatureTransferLocalization.string(forKey: "transfer.today")
+            return "\(today), \(date.formatted(date: .omitted, time: .shortened))"
         }
         if calendar.isDateInYesterday(date) {
-            return "Yesterday"
+            return FeatureTransferLocalization.string(forKey: "transfer.yesterday")
         }
         let days = calendar.dateComponents(
             [.day],
@@ -393,32 +400,78 @@ struct TransferProtocolSettings: Codable, Equatable, Sendable {
 }
 
 enum AccentColorChoice: String, CaseIterable, Codable, Identifiable, Sendable {
-    case green
-    case blue
-    case orange
-    case purple
+    case systemBlue
+    case systemGreen
+    case systemPurple
+    case systemOrange
+    case systemPink
+    case systemTeal
+    case medinaEmerald
+    case samarkandTeal
+    case iznikBlue
+    case andalusianGold
+    case ottomanCrimson
+    case cordobaBurgundy
+    case umayyadPearl
+    case abbasidObsidian
+    case system
 
     var id: String { rawValue }
 
-    var label: String {
+    var label: LocalizedStringKey {
         switch self {
-        case .green: "Green"
-        case .blue: "Blue"
-        case .orange: "Orange"
-        case .purple: "Purple"
+        case .systemBlue: "accent.blue"
+        case .systemGreen: "accent.green"
+        case .systemPurple: "accent.purple"
+        case .systemOrange: "accent.orange"
+        case .systemPink: "accent.pink"
+        case .systemTeal: "accent.teal"
+        case .system: "accent.system"
+        case .medinaEmerald: "accent.medinaEmerald"
+        case .samarkandTeal: "accent.samarkandTeal"
+        case .iznikBlue: "accent.iznikBlue"
+        case .andalusianGold: "accent.andalusianGold"
+        case .ottomanCrimson: "accent.ottomanCrimson"
+        case .cordobaBurgundy: "accent.cordobaBurgundy"
+        case .umayyadPearl: "accent.umayyadPearl"
+        case .abbasidObsidian: "accent.abbasidObsidian"
         }
     }
 
-    var resolvedColor: Color {
+    var theme: AccentTheme {
         switch self {
-        case .green:
-            return AccentColor.primary
-        case .blue:
-            return Color(nsColor: .systemBlue)
-        case .orange:
-            return Color(nsColor: .systemOrange)
-        case .purple:
-            return Color(nsColor: .systemPurple)
+        case .systemBlue: return AccentTheme.systemBlue
+        case .systemGreen: return AccentTheme.systemGreen
+        case .systemPurple: return AccentTheme.systemPurple
+        case .systemOrange: return AccentTheme.systemOrange
+        case .systemPink: return AccentTheme.systemPink
+        case .systemTeal: return AccentTheme.systemTeal
+        case .system: return AccentTheme.system
+        case .medinaEmerald: return AccentTheme.medinaEmerald
+        case .samarkandTeal: return AccentTheme.samarkandTeal
+        case .iznikBlue: return AccentTheme.iznikBlue
+        case .andalusianGold: return AccentTheme.andalusianGold
+        case .ottomanCrimson: return AccentTheme.ottomanCrimson
+        case .cordobaBurgundy: return AccentTheme.cordobaBurgundy
+        case .umayyadPearl: return AccentTheme.umayyadPearl
+        case .abbasidObsidian: return AccentTheme.abbasidObsidian
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let rawValue = try container.decode(String.self)
+        if let value = Self(rawValue: rawValue) {
+            self = value
+        } else {
+            // Migration from legacy accent colors; old "green" was the brand green now called Medina Emerald.
+            switch rawValue {
+            case "green": self = .medinaEmerald
+            case "blue": self = .systemBlue
+            case "orange": self = .systemOrange
+            case "purple": self = .systemPurple
+            default: self = .medinaEmerald
+            }
         }
     }
 }
@@ -449,7 +502,7 @@ struct TransferSettingsSnapshot: Codable, Equatable, Sendable {
     init(
         quickSave: QuickSaveMode,
         appearance: AppearanceSetting,
-        accentColor: AccentColorChoice = .green,
+        accentColor: AccentColorChoice = .medinaEmerald,
         language: LanguageSetting,
         minimizeToMenuBar: Bool,
         launchAtLogin: Bool,
@@ -472,7 +525,7 @@ struct TransferSettingsSnapshot: Codable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         quickSave = try container.decode(QuickSaveMode.self, forKey: .quickSave)
         appearance = try container.decode(AppearanceSetting.self, forKey: .appearance)
-        accentColor = try container.decodeIfPresent(AccentColorChoice.self, forKey: .accentColor) ?? .green
+        accentColor = try container.decodeIfPresent(AccentColorChoice.self, forKey: .accentColor) ?? .medinaEmerald
         language = try container.decode(LanguageSetting.self, forKey: .language)
         minimizeToMenuBar = try container.decode(Bool.self, forKey: .minimizeToMenuBar)
         launchAtLogin = try container.decode(Bool.self, forKey: .launchAtLogin)
@@ -498,7 +551,7 @@ struct TransferSettingsSnapshot: Codable, Equatable, Sendable {
         Self(
             quickSave: .on,
             appearance: .system,
-            accentColor: .green,
+            accentColor: .medinaEmerald,
             language: .system,
             minimizeToMenuBar: false,
             launchAtLogin: true,

@@ -14,9 +14,9 @@ This document captures the current feature and UX gaps found from a code audit o
    - The device name is shown in settings as read-only text.
    - The protocol settings already carry a device name, but the app does not expose an editing flow.
 
-3. Wire remaining settings that are stored but not connected to platform behavior.
-   - `language` is persisted but has no localization wiring.
-   - `accentColor` is editable in settings but is not applied broadly as a dynamic app-wide theme choice.
+3. ~~Wire remaining settings that are stored but not connected to platform behavior.~~
+   - ~~`language` is persisted but has no localization wiring.~~
+   - ~~`accentColor` is editable in settings but is not applied broadly as a dynamic app-wide theme choice.~~
 
 4. Implement favorites / trusted devices as a real concept.
    - `QuickSaveMode.favorites` exists.
@@ -40,7 +40,8 @@ This document captures the current feature and UX gaps found from a code audit o
 - Wired `Minimize to menu bar on close` via the app delegate.
 - Added app menu commands (File, View, Preferences, Help) and a full status-item menu.
 - Added file/folder/text send entry points from the menu bar and app menu.
-- Added reactive status-item icon badges for runtime, transfer, and incoming-request states.
+- Wired `language` to localized strings via `Localizable.xcstrings` and extended `LanguageSetting` to the v1 supported-language set plus Uyghur, with endonyms and RTL awareness.
+- Wired `accentColor` to an environment-aware `AccentTheme` with system colors, eight named custom palettes, and a system-accent option; Medina Emerald is the default.
 
 ## Code Areas
 

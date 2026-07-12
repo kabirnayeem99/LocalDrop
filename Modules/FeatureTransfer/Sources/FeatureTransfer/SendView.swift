@@ -8,6 +8,7 @@ struct SendView: View {
 
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     @Environment(\.appReducesMotion) private var appReduceMotion
+    @Environment(\.accentTheme) private var accentTheme
     private var reduceMotion: Bool { systemReduceMotion || appReduceMotion }
 
     @State private var dropZoneState: DropZoneInteractionState = .idle
@@ -27,13 +28,13 @@ struct SendView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                sectionTitle("Selection")
+                sectionTitle("send.selectionTitle")
 
                 LazyVGrid(columns: selectionColumns, spacing: Spacing.sm) {
                     ForEach(SendEntryKind.allCases) { type in
                         SelectionTypeButton(
                             symbol: type.symbol,
-                            label: type.rawValue,
+                            label: type.label,
                             isSelected: selectedSelectionType == type
                         ) {
                             selectedSelectionType = type
@@ -53,7 +54,7 @@ struct SendView: View {
                 }
 
                 HStack {
-                    Text("Nearby devices")
+                    Text("send.nearbyDevices")
                         .font(Typography.headline)
                         .foregroundStyle(.primary)
                     Spacer()
@@ -61,12 +62,12 @@ struct SendView: View {
                         Button { store.refreshNearbyPeers() } label: {
                             RefreshIcon(isRefreshing: store.isRefreshingDiscovery)
                         }
-                        .help(store.isRefreshingDiscovery ? "Refreshing discovery" : "Refresh")
+                        .help(store.isRefreshingDiscovery ? "root.refreshingDiscovery" : "root.refresh")
                         .disabled(store.isRefreshingDiscovery)
                         Button { store.scanNearbyPeers() } label: {
                             ScanIcon(isScanning: store.isScanningDiscovery)
                         }
-                        .help(store.isScanningDiscovery ? "Scanning for nearby devices" : "Scan")
+                        .help(store.isScanningDiscovery ? "send.scanning" : "send.scan")
                         .disabled(store.isScanningDiscovery)
                     }
                     .buttonStyle(.borderless)
@@ -92,7 +93,7 @@ struct SendView: View {
                 DropZoneView(
                     state: dropZoneState,
                     systemImage: "arrow.up.doc",
-                    label: "Drag files or folders anywhere to send"
+                    label: "send.dropZoneLabel"
                 )
                 .frame(minHeight: 80)
                 .padding(.top, Spacing.md)
@@ -133,7 +134,7 @@ struct SendView: View {
         }
     }
 
-    private func sectionTitle(_ text: String) -> some View {
+    private func sectionTitle(_ text: LocalizedStringKey) -> some View {
         Text(text)
             .font(Typography.headline)
             .foregroundStyle(.primary)
@@ -142,7 +143,7 @@ struct SendView: View {
     private var stagedItemsSection: some View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
             HStack(alignment: .firstTextBaseline, spacing: Spacing.sm) {
-                sectionTitle("Staged Items")
+                sectionTitle("send.stagedItems")
                 Spacer(minLength: 0)
                 Text(store.stagedItems.stagedBatchSummaryLabel)
                     .font(Typography.subheadline)
@@ -167,7 +168,7 @@ struct SendView: View {
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle.continuous(Radius.xl))
         .overlay {
             RoundedRectangle.continuous(Radius.xl)
-                .strokeBorder(AccentColor.primary.opacity(0.14), lineWidth: 0.5)
+                .strokeBorder(accentTheme.primary.opacity(0.14), lineWidth: 0.5)
         }
     }
 
@@ -205,13 +206,14 @@ private struct SelectionTypeButton: View {
     let isSelected: Bool
     let action: () -> Void
     @State private var hovering = false
+    @Environment(\.accentTheme) private var accentTheme
 
     var body: some View {
         Button(action: action) {
             VStack(spacing: Spacing.xs + Spacing.xxs) {
                 Image(systemName: symbol)
                     .font(.system(size: 24, weight: .regular))
-                    .foregroundStyle(isSelected ? .white : AccentColor.primary)
+                    .foregroundStyle(isSelected ? .white : accentTheme.primary)
                 Text(label)
                     .font(Typography.headline)
                     .foregroundStyle(isSelected ? .white : .primary)
@@ -219,13 +221,13 @@ private struct SelectionTypeButton: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, Spacing.lg)
             .background(
-                isSelected ? AnyShapeStyle(AccentColor.primary) : AnyShapeStyle(.background),
+                isSelected ? AnyShapeStyle(accentTheme.primary) : AnyShapeStyle(.background),
                 in: RoundedRectangle.continuous(Radius.xl)
             )
             .overlay {
                 RoundedRectangle.continuous(Radius.xl)
                     .strokeBorder(
-                        isSelected || hovering ? AccentColor.primary.opacity(0.55) : Color(nsColor: .separatorColor),
+                        isSelected || hovering ? accentTheme.primary.opacity(0.55) : Color(nsColor: .separatorColor),
                         lineWidth: isSelected || hovering ? 1 : 0.5
                     )
             }
@@ -288,10 +290,10 @@ private struct NearbyDevicesEmptyState: View {
             }
 
             VStack(alignment: .leading, spacing: Spacing.xxs) {
-                Text("No nearby devices")
+                Text("send.noDevices")
                     .font(Typography.headline)
                     .foregroundStyle(.primary)
-                Text("Refresh discovery or keep this screen open while another device starts LocalDrop.")
+                Text("send.noDevicesHelp")
                     .font(Typography.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -314,6 +316,7 @@ private struct StagedFileChip: View {
 
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     @Environment(\.appReducesMotion) private var appReduceMotion
+    @Environment(\.accentTheme) private var accentTheme
     private var reduceMotion: Bool { systemReduceMotion || appReduceMotion }
     // Starts flashed so the accent tint is the first rendered frame, then
     // settles back to the resting fill once the chip appears.
@@ -322,12 +325,12 @@ private struct StagedFileChip: View {
     var body: some View {
         HStack(spacing: Spacing.sm) {
             RoundedRectangle.continuous(Radius.md)
-                .fill(justStaged ? AnyShapeStyle(AccentColor.primary.opacity(0.22)) : AnyShapeStyle(.background))
+                .fill(justStaged ? AnyShapeStyle(accentTheme.primary.opacity(0.22)) : AnyShapeStyle(.background))
                 .frame(width: 40, height: 40)
                 .overlay {
                     Image(systemName: file.fileTypeSymbol)
                         .font(.system(size: 18))
-                        .foregroundStyle(AccentColor.primary)
+                        .foregroundStyle(accentTheme.primary)
                 }
                 .overlay {
                     RoundedRectangle.continuous(Radius.md)
@@ -363,14 +366,14 @@ private struct StagedFileChip: View {
                     .background(Color(nsColor: .systemGray).opacity(0.15), in: Circle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Remove \(file.name)")
+            .accessibilityLabel(Text(String(format: String(localized: .init("send.removeItem"), bundle: .module), file.name)))
         }
         .padding(.horizontal, Spacing.md - Spacing.xxs)
         .padding(.vertical, Spacing.sm)
-        .background(AccentColor.primarySubtleFill, in: RoundedRectangle.continuous(Radius.xl))
+        .background(accentTheme.primarySubtleFill, in: RoundedRectangle.continuous(Radius.xl))
         .overlay {
             RoundedRectangle.continuous(Radius.xl)
-                .strokeBorder(AccentColor.primary.opacity(0.14), lineWidth: 0.5)
+                .strokeBorder(accentTheme.primary.opacity(0.14), lineWidth: 0.5)
         }
     }
 }

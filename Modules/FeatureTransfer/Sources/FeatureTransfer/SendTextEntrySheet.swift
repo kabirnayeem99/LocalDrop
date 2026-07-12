@@ -5,6 +5,7 @@ public struct SendTextEntrySheet: View {
     @State private var draft: String
     @State private var hasAttemptedSubmit = false
     @FocusState private var isEditorFocused: Bool
+    @Environment(\.accentTheme) private var accentTheme
 
     private let onStage: @MainActor (String) -> Void
     private let onCancel: @MainActor () -> Void
@@ -74,7 +75,7 @@ public struct SendTextEntrySheet: View {
     }
 
     private var validationTint: Color {
-        trimmedDraft.isEmpty && hasAttemptedSubmit ? SemanticColor.destructive : AccentColor.primary.opacity(0.2)
+        trimmedDraft.isEmpty && hasAttemptedSubmit ? SemanticColor.destructive : accentTheme.primary.opacity(0.2)
     }
 
     private func submit() {

@@ -50,12 +50,12 @@ struct HistoryRowView: View {
             Button {
                 store.revealInFinder(entry)
             } label: {
-                Label("Reveal in Finder", systemImage: "folder")
+                Label("history.revealInFinder", systemImage: "folder")
             }
             Button {
                 store.openHistoryItem(entry)
             } label: {
-                Label("Open", systemImage: "arrow.up.forward.app")
+                Label("history.open", systemImage: "arrow.up.forward.app")
             }
         } label: {
             Image(systemName: "ellipsis.circle")
@@ -66,7 +66,7 @@ struct HistoryRowView: View {
         .menuIndicator(.hidden)
         .frame(width: 24)
         .disabled(hasFile == false)
-        .help(hasFile ? "Reveal or open this file" : "File location unavailable")
+        .help(hasFile ? "history.rowHelp" : "history.locationUnavailable")
     }
 
     private var directionSymbol: String {

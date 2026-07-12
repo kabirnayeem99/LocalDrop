@@ -3,6 +3,7 @@ import DesignSystem
 
 struct ReceiveView: View {
     @Bindable var store: TransferFeatureStore
+    @Environment(\.accentTheme) private var accentTheme
 
     var body: some View {
         VStack(spacing: 0) {
@@ -14,21 +15,21 @@ struct ReceiveView: View {
                 .foregroundStyle(.primary)
                 .padding(.top, Spacing.xl + Spacing.xxs)
 
-            (Text("Waiting to receive · ")
+            (Text("receive.waiting")
                 .foregroundStyle(.secondary)
              + Text("#\(store.waitingIdentifier)")
-                .foregroundStyle(AccentColor.primary))
+                .foregroundStyle(accentTheme.primary))
                 .font(Typography.body.weight(.medium))
                 .padding(.top, Spacing.xxs)
 
             VStack(spacing: Spacing.sm) {
-                Text("Quick Save")
+                Text("receive.quickSave")
                     .font(Typography.caption1.weight(.semibold))
                     .textCase(.uppercase)
                     .kerning(0.3)
                     .foregroundStyle(.secondary)
 
-                Picker("Quick Save", selection: $store.quickSave) {
+                Picker("receive.quickSave", selection: $store.quickSave) {
                     ForEach(QuickSaveMode.allCases) { mode in
                         Text(mode.label).tag(mode)
                     }
@@ -36,7 +37,7 @@ struct ReceiveView: View {
                 .pickerStyle(.segmented)
                 .labelsHidden()
                 .fixedSize()
-                .tint(AccentColor.primary)
+                .tint(accentTheme.primary)
             }
             .padding(.top, Spacing.xxl)
         }
@@ -51,6 +52,7 @@ struct ReceiveView: View {
 private struct ReceiveHero: View {
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     @Environment(\.appReducesMotion) private var appReduceMotion
+    @Environment(\.accentTheme) private var accentTheme
     private var reduceMotion: Bool { systemReduceMotion || appReduceMotion }
 
     var body: some View {
@@ -71,7 +73,7 @@ private struct ReceiveHero: View {
         let time = animated ? date.timeIntervalSinceReferenceDate : 0
 
         return ZStack {
-            PulseRingView(ringCount: 3, color: AccentColor.primary.opacity(0.48), lineWidth: 1.5, duration: 3.2)
+            PulseRingView(ringCount: 3, color: accentTheme.primary.opacity(0.48), lineWidth: 1.5, duration: 3.2)
                 .frame(width: 154, height: 154)
                 .opacity(animated ? 1 : 0.72)
 
@@ -98,6 +100,7 @@ private struct ReceiveHero: View {
 private struct BrandBadge: View {
     let time: TimeInterval
     let animated: Bool
+    @Environment(\.accentTheme) private var accentTheme
 
     private var scale: CGFloat {
         guard animated else { return 1 }
@@ -106,7 +109,7 @@ private struct BrandBadge: View {
 
     var body: some View {
         RoundedRectangle.continuous(Radius.xxl + Radius.lg)
-            .fill(AccentColor.primary)
+            .fill(accentTheme.primary)
             .frame(width: 128, height: 128)
             .overlay {
                 RoundedRectangle.continuous(Radius.xxl + Radius.lg)
@@ -118,7 +121,7 @@ private struct BrandBadge: View {
                     .frame(width: 60, height: 60)
             }
             .scaleEffect(scale)
-            .shadow(color: AccentColor.primary.opacity(0.4), radius: animated ? 22 : 16, y: 12)
+            .shadow(color: accentTheme.primary.opacity(0.4), radius: animated ? 22 : 16, y: 12)
     }
 }
 
@@ -140,6 +143,7 @@ private struct OrbitingDeviceView: View {
     let device: OrbitingDevice
     let time: TimeInterval
     let animated: Bool
+    @Environment(\.accentTheme) private var accentTheme
 
     var body: some View {
         let progress = animated ? (time.truncatingRemainder(dividingBy: device.duration) / device.duration) : device.phase
@@ -151,11 +155,11 @@ private struct OrbitingDeviceView: View {
 
         Image(systemName: device.symbol)
             .font(.system(size: 15, weight: .semibold))
-            .foregroundStyle(AccentColor.primary)
+            .foregroundStyle(accentTheme.primary)
             .frame(width: 30, height: 30)
             .background(.regularMaterial, in: Circle())
             .overlay {
-                Circle().strokeBorder(AccentColor.primary.opacity(0.22), lineWidth: 0.5)
+                Circle().strokeBorder(accentTheme.primary.opacity(0.22), lineWidth: 0.5)
             }
             .offset(x: point.x, y: point.y)
             .opacity(animated ? 0.92 : 0.8)
@@ -204,6 +208,7 @@ private struct SignalSpark: View {
 private struct RotatingDashedRing: View {
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     @Environment(\.appReducesMotion) private var appReduceMotion
+    @Environment(\.accentTheme) private var accentTheme
     private var reduceMotion: Bool { systemReduceMotion || appReduceMotion }
 
     var body: some View {
@@ -220,7 +225,7 @@ private struct RotatingDashedRing: View {
     private var ring: some View {
         Circle()
             .strokeBorder(
-                AccentColor.primary.opacity(0.28),
+                accentTheme.primary.opacity(0.28),
                 style: StrokeStyle(lineWidth: 1.5, dash: [4, 6])
             )
     }

@@ -52,26 +52,26 @@ struct TransferMenuBarExtraView: View {
         }
         Divider()
 
-        Button("Send File…") {
+        Button("menubar.sendFile") {
             actions.sendFiles()
         }
         .keyboardShortcut("s", modifiers: [.command, .shift])
 
-        Button("Send Folder…") {
+        Button("menubar.sendFolder") {
             actions.sendFolders()
         }
 
-        Button("Send Text or Clipboard…") {
+        Button("menubar.sendTextOrClipboard") {
             actions.sendTextOrClipboard()
         }
 
         Divider()
 
-        Menu("Send to Nearby") {
+        Menu("menubar.sendToNearby") {
             if store.stagedItems.isEmpty {
-                Text("Stage files, folders, or text in LocalDrop first")
+                Text("menubar.stageFirst")
             } else if store.nearbyPeers.isEmpty {
-                Text("No nearby devices")
+                Text("send.noDevices")
             } else {
                 ForEach(store.nearbyPeers) { peer in
                     Button(peer.name) {
@@ -82,13 +82,14 @@ struct TransferMenuBarExtraView: View {
 
             Divider()
 
-            Button("Refresh") {
+            Button("root.refresh") {
                 store.refreshNearbyPeers()
             }
             .keyboardShortcut("r", modifiers: [.command])
         }
 
-        Menu("Receiving: \(store.quickSave.menuLabel)") {
+        let receivingTitle = FeatureTransferLocalization.format("menubar.receivingTitle", store.quickSave.menuLabel)
+        Menu {
             ForEach(QuickSaveMode.allCases) { mode in
                 Button(mode.menuLabel) {
                     store.updateQuickSave(mode)
@@ -98,15 +99,17 @@ struct TransferMenuBarExtraView: View {
 
             Divider()
 
-            Button("Pause Receiving (Requires Runtime Support)") {}
+            Button("menubar.pauseReceiving") {}
                 .disabled(true)
+        } label: {
+            Text(receivingTitle)
         }
 
         if let activeTransfer = store.activeTransfer {
             Divider()
 
-            Text(summary.activeTransferTitle ?? "Active Transfer")
-            Button("Cancel") {
+            Text(summary.activeTransferTitle ?? FeatureTransferLocalization.string(forKey: "menubar.activeTransfer"))
+            Button("general.cancel") {
                 store.cancelActiveTransfer()
             }
             .disabled(activeTransfer.progress >= 1)
@@ -115,20 +118,20 @@ struct TransferMenuBarExtraView: View {
         if store.incomingRequest != nil {
             Divider()
 
-            Text(summary.incomingRequestTitle ?? "Incoming Request")
-            Button("Accept") {
+            Text(summary.incomingRequestTitle ?? FeatureTransferLocalization.string(forKey: "menubar.incomingRequest"))
+            Button("incomingRequest.accept") {
                 store.acceptIncomingRequest()
             }
-            Button("Decline") {
+            Button("incomingRequest.decline") {
                 store.declineIncomingRequest()
             }
         }
 
         Divider()
 
-        Menu("Recent Transfers") {
+        Menu("menubar.recentTransfers") {
             if summary.recentHistoryEntries.isEmpty {
-                Text("No recent transfers yet")
+                Text("history.noTransfers")
             } else {
                 ForEach(summary.recentHistoryEntries) { entry in
                     Text(entry.menuTitle)
@@ -137,7 +140,7 @@ struct TransferMenuBarExtraView: View {
 
             Divider()
 
-            Button("Show All in History…") {
+            Button("menubar.showAllHistory") {
                 store.screen = .history
                 actions.openLocalDrop()
             }
@@ -145,12 +148,12 @@ struct TransferMenuBarExtraView: View {
 
         Divider()
 
-        Button("Open LocalDrop") {
+        Button("menubar.openLocalDrop") {
             actions.openLocalDrop()
         }
         .keyboardShortcut("o", modifiers: [.command])
 
-        Button("Preferences…") {
+        Button("menubar.preferences") {
             store.screen = .settings
             actions.openPreferences()
         }
@@ -158,7 +161,7 @@ struct TransferMenuBarExtraView: View {
 
         Divider()
 
-        Button("Quit LocalDrop") {
+        Button("menubar.quitLocalDrop") {
             actions.quit()
         }
         .keyboardShortcut("q", modifiers: [.command])
@@ -169,7 +172,9 @@ extension TransferFeatureStore {
     var menuSummary: TransferMenuSummary {
         TransferMenuSummary(
             statusSymbol: menuStatusSymbol,
-            headerTitle: deviceName.isEmpty ? "LocalDrop" : deviceName,
+            headerTitle: deviceName.isEmpty
+                ? FeatureTransferLocalization.string(forKey: "root.localDrop")
+                : deviceName,
             statusText: menuStatusText,
             stagedItemCount: stagedItems.count,
             stagedItemsText: stagedItems.isEmpty ? nil : stagedItems.stagedBatchSummaryLabel,
@@ -196,7 +201,7 @@ extension TransferFeatureStore {
 
     private var menuStatusText: String {
         if let incomingRequest {
-            return "Incoming request from \(incomingRequest.deviceName)"
+            return FeatureTransferLocalization.format("menubar.incomingRequestFromFormat", incomingRequest.deviceName)
         }
         if let activeTransfer {
             return activeTransfer.menuTitle
@@ -212,14 +217,19 @@ extension TransferFeatureStore {
 
 extension ActiveTransferProgress {
     var menuTitle: String {
-        let action = direction == .sending ? "Sending" : "Receiving"
-        return "\(action) \(fileName) \(Int(progress * 100))%"
+        let action = direction == .sending
+            ? FeatureTransferLocalization.string(forKey: "transfer.progress.sending")
+            : FeatureTransferLocalization.string(forKey: "transfer.progress.receiving")
+        return FeatureTransferLocalization.format("transfer.progress.menuTitleFormat", action, fileName, Int(progress * 100))
     }
 }
 
 extension IncomingTransferRequest {
     var menuTitle: String {
-        "\(deviceName) wants to send \(files.count == 1 ? "1 file" : "\(files.count) files")"
+        let fileCountString = files.count == 1
+            ? FeatureTransferLocalization.string(forKey: "incomingRequest.files.one")
+            : FeatureTransferLocalization.format("incomingRequest.files.many", files.count)
+        return FeatureTransferLocalization.format("incomingRequest.menuTitleFormat", deviceName, fileCountString)
     }
 }
 
@@ -236,16 +246,19 @@ extension HistoryEntry: Equatable {
     }
 
     var menuTitle: String {
-        "\(fileName) — \(timestampDisplay)"
+        FeatureTransferLocalization.format("history.menuTitleFormat", fileName, timestampDisplay)
     }
 }
 
 extension QuickSaveMode {
     var menuLabel: String {
         switch self {
-        case .off: "Ask Each Time"
-        case .favorites: "Favorites Only"
-        case .on: "Downloads"
+        case .off:
+            return FeatureTransferLocalization.string(forKey: "quicksave.menuLabel.off")
+        case .favorites:
+            return FeatureTransferLocalization.string(forKey: "quicksave.menuLabel.favorites")
+        case .on:
+            return FeatureTransferLocalization.string(forKey: "quicksave.menuLabel.on")
         }
     }
 }

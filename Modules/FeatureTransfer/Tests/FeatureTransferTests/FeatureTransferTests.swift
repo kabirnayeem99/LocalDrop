@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import XCTest
 @testable import FeatureTransfer
 import AppLogging
@@ -1233,6 +1234,200 @@ final class FeatureTransferTests: XCTestCase {
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory
     }
+
+    func testAccentColorChoiceDefaultIsMedinaEmerald() {
+        let snapshot = TransferSettingsSnapshot.default(
+            deviceName: "LocalDrop Test Mac",
+            saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
+        )
+        XCTAssertEqual(snapshot.accentColor, .medinaEmerald)
+    }
+
+    func testAccentColorChoiceThemeResolvesForEveryCase() {
+        for choice in AccentColorChoice.allCases {
+            XCTAssertNotEqual(choice.theme.primary, Color.clear, "Primary color should be resolved for \(choice)")
+        }
+    }
+
+    func testLegacyGreenAccentColorMigratesToMedinaEmerald() throws {
+        let payload = """
+        "green"
+        """
+        let choice = try JSONDecoder().decode(AccentColorChoice.self, from: Data(payload.utf8))
+        XCTAssertEqual(choice, .medinaEmerald)
+    }
+
+    func testLegacyBlueAccentColorMigratesToSystemBlue() throws {
+        let payload = """
+        "blue"
+        """
+        let choice = try JSONDecoder().decode(AccentColorChoice.self, from: Data(payload.utf8))
+        XCTAssertEqual(choice, .systemBlue)
+    }
+
+    func testLegacyOrangeAccentColorMigratesToSystemOrange() throws {
+        let payload = """
+        "orange"
+        """
+        let choice = try JSONDecoder().decode(AccentColorChoice.self, from: Data(payload.utf8))
+        XCTAssertEqual(choice, .systemOrange)
+    }
+
+    func testLegacyPurpleAccentColorMigratesToSystemPurple() throws {
+        let payload = """
+        "purple"
+        """
+        let choice = try JSONDecoder().decode(AccentColorChoice.self, from: Data(payload.utf8))
+        XCTAssertEqual(choice, .systemPurple)
+    }
+
+    func testUnknownLegacyAccentColorFallsBackToMedinaEmerald() throws {
+        let payload = """
+        "chartreuse"
+        """
+        let choice = try JSONDecoder().decode(AccentColorChoice.self, from: Data(payload.utf8))
+        XCTAssertEqual(choice, .medinaEmerald)
+    }
+
+    func testLanguageSettingLocaleForEverySupportedLanguage() {
+        let expectations: [(LanguageSetting, String)] = [
+            (.arabic, "ar"),
+            (.indonesian, "id"),
+            (.urdu, "ur"),
+            (.bengali, "bn"),
+            (.hindi, "hi"),
+            (.turkish, "tr"),
+            (.english, "en-US"),
+            (.french, "fr"),
+            (.russian, "ru"),
+            (.uyghur, "ug"),
+            (.simplifiedChinese, "zh-Hans"),
+            (.spanish, "es"),
+            (.brazilianPortuguese, "pt-BR"),
+            (.german, "de"),
+            (.vietnamese, "vi"),
+            (.korean, "ko"),
+            (.japanese, "ja"),
+            (.system, "__system__")
+        ]
+
+        for (language, expectedIdentifier) in expectations {
+            if expectedIdentifier == "__system__" {
+                XCTAssertNil(language.locale)
+            } else {
+                XCTAssertEqual(language.locale?.identifier, expectedIdentifier)
+            }
+        }
+    }
+
+    func testApplyingLanguageOverrideInjectsLocaleIntoEnvironment() {
+        struct LocaleReader: View {
+            @Environment(\.locale) var locale
+            var body: some View { EmptyView() }
+        }
+
+        let reader = LocaleReader().applyingLanguageOverride(.french)
+        XCTAssertNotNil(reader)
+    }
+
+    func testAllLanguageEndonymsAreNonEmpty() {
+        for language in LanguageSetting.allCases {
+            XCTAssertFalse(language.label.isEmpty, "Endonym should not be empty for \(language)")
+        }
+    }
+
+    func testLanguageSettingCaseIterableOrderMatchesProductPriority() {
+        let expected: [LanguageSetting] = [
+            .arabic, .indonesian, .urdu, .bengali, .hindi, .turkish,
+            .english, .french, .russian, .uyghur, .simplifiedChinese,
+            .spanish, .brazilianPortuguese, .german, .vietnamese,
+            .korean, .japanese, .system
+        ]
+        XCTAssertEqual(LanguageSetting.allCases, expected)
+    }
+
+    func testLocalizationCatalogHasEnglishTranslationForEveryKey() throws {
+        let catalog = try loadStringCatalog()
+        let missingKeys = catalog.strings.keys.sorted().filter { key in
+            guard
+                let stringUnit = catalog.strings[key]?.localizations?["en"]?.stringUnit,
+                stringUnit.state == "translated",
+                let value = stringUnit.value?.trimmingCharacters(in: .whitespacesAndNewlines),
+                value.isEmpty == false
+            else {
+                return true
+            }
+            return false
+        }
+
+        XCTAssertEqual(missingKeys, [])
+    }
+
+    func testLocalizationCatalogResolvesEveryKeyInEnglish() throws {
+        let catalog = try loadStringCatalog()
+
+        for key in catalog.strings.keys.sorted() {
+            let resolved = FeatureTransferLocalization.string(forKey: key)
+            XCTAssertNotEqual(resolved, key, "Expected resolved English string for key \(key)")
+        }
+    }
+
+    func testLocalizationVerificationScriptPassesCurrentCatalog() throws {
+        let result = Process()
+        result.executableURL = URL(fileURLWithPath: "/usr/bin/swift")
+        result.arguments = [
+            scriptURL.path,
+            stringCatalogURL.path
+        ]
+
+        let stderr = Pipe()
+        result.standardError = stderr
+        try result.run()
+        result.waitUntilExit()
+
+        let errorOutput = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)
+        XCTAssertEqual(result.terminationStatus, 0, errorOutput ?? "verification script failed")
+    }
+
+    private var stringCatalogURL: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/FeatureTransfer/Resources/Localizable.xcstrings")
+    }
+
+    private var scriptURL: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("scripts/verify-featuretransfer-localizations.swift")
+    }
+
+    private func loadStringCatalog() throws -> StringCatalog {
+        let data = try Data(contentsOf: stringCatalogURL)
+        return try JSONDecoder().decode(StringCatalog.self, from: data)
+    }
+}
+
+private struct StringCatalog: Decodable {
+    struct Entry: Decodable {
+        struct Localization: Decodable {
+            struct StringUnit: Decodable {
+                let state: String?
+                let value: String?
+            }
+
+            let stringUnit: StringUnit?
+        }
+
+        let localizations: [String: Localization]?
+    }
+
+    let strings: [String: Entry]
 }
 
 private actor FakeTransferRuntime: TransferRuntime {

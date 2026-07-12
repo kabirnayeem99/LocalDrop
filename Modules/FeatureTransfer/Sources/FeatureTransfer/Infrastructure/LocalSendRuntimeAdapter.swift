@@ -244,8 +244,8 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
                     counterpartName: peer.name,
                     fileName: item.name,
                     progress: Double(index) / Double(totalCount),
-                    throughput: "Preparing…",
-                    etaDescription: "\(totalCount - index) item(s) remaining",
+                    throughput: FeatureTransferLocalization.string(forKey: "transfer.status.preparing"),
+                    etaDescription: FeatureTransferLocalization.format("transfer.status.itemsRemaining", totalCount - index),
                     byteCount: item.byteCount,
                     fileURL: item.fileURL
                 )
@@ -306,8 +306,8 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
                     counterpartName: peer.name,
                     fileName: item.name,
                     progress: Double(index + 1) / Double(totalCount),
-                    throughput: byteCount > 0 ? ByteCountFormatter.string(fromByteCount: byteCount, countStyle: .file) : "Uploaded",
-                    etaDescription: index + 1 == totalCount ? "Complete" : "\(totalCount - index - 1) item(s) remaining",
+                    throughput: byteCount > 0 ? ByteCountFormatter.string(fromByteCount: byteCount, countStyle: .file) : FeatureTransferLocalization.string(forKey: "transfer.status.uploaded"),
+                    etaDescription: index + 1 == totalCount ? FeatureTransferLocalization.string(forKey: "transfer.status.complete") : FeatureTransferLocalization.format("transfer.status.itemsRemaining", totalCount - index - 1),
                     byteCount: byteCount > 0 ? byteCount : nil,
                     fileURL: item.fileURL
                 )
@@ -384,16 +384,16 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
                     switch receiveSession.status {
                     case .waiting:
                         statusProgress = 0.05
-                        etaDescription = "Waiting for sender"
+                        etaDescription = FeatureTransferLocalization.string(forKey: "transfer.status.waitingForSender")
                     case .transferring:
                         statusProgress = 0.6
-                        etaDescription = "Receiving…"
+                        etaDescription = FeatureTransferLocalization.string(forKey: "transfer.status.receiving")
                     case .finished:
                         statusProgress = 1.0
-                        etaDescription = "Complete"
+                        etaDescription = FeatureTransferLocalization.string(forKey: "transfer.status.complete")
                     case .canceled:
                         statusProgress = 0
-                        etaDescription = "Canceled"
+                        etaDescription = FeatureTransferLocalization.string(forKey: "transfer.status.canceled")
                     }
 
                     let leadFile = receiveSession.files.values.first?.file
@@ -437,9 +437,9 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
                                     direction: .receiving,
                                     counterpartName: receiveSession.senderInfo.alias,
                                     fileName: record.file.fileName,
-                                    progress: 1.0,
-                                    throughput: "Saved",
-                                    etaDescription: etaDescription,
+                                progress: 1.0,
+                                throughput: FeatureTransferLocalization.string(forKey: "transfer.status.saved"),
+                                etaDescription: etaDescription,
                                     byteCount: record.file.size,
                                     fileURL: record.destinationURL
                                 )
@@ -453,7 +453,7 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
                                 counterpartName: receiveSession.senderInfo.alias,
                                 fileName: leadFile.fileName,
                                 progress: statusProgress,
-                                throughput: "Receiving",
+                                throughput: FeatureTransferLocalization.string(forKey: "transfer.status.receivingProgress"),
                                 etaDescription: etaDescription
                             )
                         )
@@ -476,7 +476,9 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
                     )
                 }
                 let totalBytes = request.files.values.reduce(Int64.zero) { $0 + $1.size }
-                let subtitle = "\(request.info.alias) · \(mappedFiles.count) item(s) · \(ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file))"
+                let fileCountLabel = FeatureTransferLocalization.format("incomingRequest.itemCount", mappedFiles.count)
+                let totalSizeLabel = ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file)
+                let subtitle = FeatureTransferLocalization.format("incomingRequest.subtitleFormat", request.info.alias, fileCountLabel, totalSizeLabel)
                 await incomingBroadcaster.yield(
                     IncomingTransferRequest(
                         id: request.id,
@@ -655,9 +657,9 @@ enum TransferFeatureError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .peerNotFound(let id):
-            "Peer not found: \(id)"
+            return FeatureTransferLocalization.format("error.peerNotFound", id)
         case .unreachablePeer(let name):
-            "\(name) is not addressable yet."
+            return FeatureTransferLocalization.format("error.unreachablePeer", name)
         }
     }
 }

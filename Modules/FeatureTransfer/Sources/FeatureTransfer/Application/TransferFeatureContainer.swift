@@ -16,10 +16,12 @@ public final class TransferFeatureContainer {
 
     public var rootView: some View {
         RootView(store: store)
+            .environment(\.accentTheme, store.accentColor.theme)
     }
 
     public func rootView(sendEntryActions: SendEntryActions) -> some View {
         RootView(store: store, sendEntryActions: sendEntryActions)
+            .environment(\.accentTheme, store.accentColor.theme)
     }
 
     public var menuStatusSymbol: String {
@@ -29,7 +31,7 @@ public final class TransferFeatureContainer {
     public func menuBarExtraView(actions: TransferMenuActions) -> some View {
         TransferMenuBarExtraView(store: store, actions: actions)
             .applyingLanguageOverride(store.language)
-            .tint(store.accentColor.resolvedColor)
+            .environment(\.accentTheme, store.accentColor.theme)
     }
 
     public var shouldMinimizeToMenuBar: Bool {
@@ -90,6 +92,7 @@ public final class TransferFeatureContainer {
         guard trimmed.isEmpty == false else {
             recordTextStagingFailure(
                 message: "Text cannot be empty.",
+                localizedMessage: FeatureTransferLocalization.string(forKey: "feedback.textEmpty"),
                 event: "app.import.text.empty"
             )
             return false
@@ -116,6 +119,7 @@ public final class TransferFeatureContainer {
         } catch {
             recordTextStagingFailure(
                 message: "Text could not be staged.",
+                localizedMessage: FeatureTransferLocalization.string(forKey: "feedback.textStagingFailed"),
                 event: "app.import.text.failed",
                 error: error
             )
@@ -287,7 +291,7 @@ public final class TransferFeatureContainer {
                 logger: logger
             )
             store.lastErrorMessage = error.localizedDescription
-            store.runtimeStatusText = "Unavailable"
+            store.runtimeStatusText = FeatureTransferLocalization.string(forKey: "runtime.unavailable")
             return TransferFeatureContainer(store: store, logger: logger)
         }
     }
@@ -310,7 +314,7 @@ public final class TransferFeatureContainer {
             snapshot: snapshot,
             logger: .disabled()
         )
-        store.runtimeStatusText = "Discoverable"
+        store.runtimeStatusText = FeatureTransferLocalization.string(forKey: "runtime.discoverable")
         store.isRuntimeAvailable = true
         return TransferFeatureContainer(store: store, logger: .disabled())
     }
@@ -372,21 +376,23 @@ public final class TransferFeatureContainer {
 
     private func recordTextStagingFailure(
         message: String,
+        localizedMessage: String? = nil,
         event: String,
         error: (any Error)? = nil
     ) {
+        let failureText = error?.localizedDescription ?? message
         logger.emit(
             level: .error,
             event: event,
             scope: "TransferFeatureContainer",
             attributes: [
                 .string("result", "failure"),
-                .string("error.message", error?.localizedDescription ?? message)
+                .string("error.message", failureText)
             ]
         )
-        store.lastErrorMessage = error?.localizedDescription ?? message
+        store.lastErrorMessage = failureText
         store.feedback = TransferFeedback(
-            message: message,
+            message: localizedMessage ?? message,
             symbol: "exclamationmark.triangle.fill",
             tone: .destructive
         )

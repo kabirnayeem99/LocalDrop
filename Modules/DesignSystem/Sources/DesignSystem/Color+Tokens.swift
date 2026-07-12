@@ -22,29 +22,108 @@ public enum Primary {
     public static let p900 = Color(hex: 0x111D0C)
 }
 
-public enum AccentColor {
-    public static let primary = adaptive(light: Primary.p500, dark: Primary.p400)
-    public static let primaryHover = adaptive(light: Primary.p600, dark: Primary.p300)
-    public static let primaryPressed = adaptive(light: Primary.p700, dark: Primary.p500)
-    public static let primaryDisabled = adaptive(
-        light: Primary.p200.opacity(0.4),
-        dark: Primary.p700.opacity(0.4)
-    )
-    public static let primarySubtleFill = adaptive(light: Primary.p50, dark: Primary.p900)
+public struct AccentTheme {
+    public let primary: Color
+    public let primaryHover: Color
+    public let primaryPressed: Color
+    public let primaryDisabled: Color
+    public let primarySubtleFill: Color
 
-    // Resolves per-appearance rather than reusing the light base, so accent
-    // usage keeps contrast against dark backgrounds the way system accents do.
-    private static func adaptive(light: Color, dark: Color) -> Color {
-        Color(nsColor: NSColor(name: nil) { appearance in
-            let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-            return NSColor(isDark ? dark : light)
-        })
+    public init(
+        primary: Color,
+        primaryHover: Color,
+        primaryPressed: Color,
+        primaryDisabled: Color,
+        primarySubtleFill: Color
+    ) {
+        self.primary = primary
+        self.primaryHover = primaryHover
+        self.primaryPressed = primaryPressed
+        self.primaryDisabled = primaryDisabled
+        self.primarySubtleFill = primarySubtleFill
+    }
+
+    public static func palette(
+        lightHex: UInt32,
+        darkHex: UInt32
+    ) -> AccentTheme {
+        let primary = adaptive(light: Color(hex: lightHex), dark: Color(hex: darkHex))
+        return AccentTheme(
+            primary: primary,
+            primaryHover: primary.opacity(0.88),
+            primaryPressed: primary.opacity(0.76),
+            primaryDisabled: primary.opacity(0.40),
+            primarySubtleFill: primary.opacity(0.12)
+        )
+    }
+
+    public static func systemAccent() -> AccentTheme {
+        theme(for: .controlAccentColor)
+    }
+
+    private static func theme(for color: NSColor) -> AccentTheme {
+        let c = Color(nsColor: color)
+        return AccentTheme(
+            primary: c,
+            primaryHover: Color(nsColor: color.withSystemEffect(.pressed)),
+            primaryPressed: Color(nsColor: color.withSystemEffect(.deepPressed)),
+            primaryDisabled: c.opacity(0.4),
+            primarySubtleFill: c.opacity(0.12)
+        )
+    }
+
+    public static let systemBlue: AccentTheme = theme(for: .systemBlue)
+    public static let systemGreen: AccentTheme = theme(for: .systemGreen)
+    public static let systemPurple: AccentTheme = theme(for: .systemPurple)
+    public static let systemOrange: AccentTheme = theme(for: .systemOrange)
+    public static let systemPink: AccentTheme = theme(for: .systemPink)
+    public static let systemTeal: AccentTheme = theme(for: .systemTeal)
+
+    public static let medinaEmerald = palette(lightHex: 0x15803D, darkHex: 0x22C55E)
+    public static let samarkandTeal = palette(lightHex: 0x0F766E, darkHex: 0x2DD4BF)
+    public static let iznikBlue = palette(lightHex: 0x2563EB, darkHex: 0x60A5FA)
+    public static let andalusianGold = palette(lightHex: 0xC58A12, darkHex: 0xF2B84B)
+    public static let ottomanCrimson = palette(lightHex: 0xB42335, darkHex: 0xF05261)
+    public static let cordobaBurgundy = palette(lightHex: 0x7F1D3A, darkHex: 0xD65A82)
+    public static let umayyadPearl = palette(lightHex: 0xD6C7A1, darkHex: 0xE8DDBD)
+    public static let abbasidObsidian = palette(lightHex: 0x27272A, darkHex: 0x71717A)
+    public static let system = systemAccent()
+}
+
+public enum AccentThemeKey: EnvironmentKey {
+    public static let defaultValue: AccentTheme = .medinaEmerald
+}
+
+public extension EnvironmentValues {
+    var accentTheme: AccentTheme {
+        get { self[AccentThemeKey.self] }
+        set { self[AccentThemeKey.self] = newValue }
     }
 }
 
+private func adaptive(light: Color, dark: Color) -> Color {
+    Color(nsColor: NSColor(name: nil) { appearance in
+        let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        return NSColor(isDark ? dark : light)
+    })
+}
+
+public enum AccentColor {
+    @available(*, deprecated, renamed: "AccentTheme.medinaEmerald.primary")
+    public static let primary = AccentTheme.medinaEmerald.primary
+    @available(*, deprecated, renamed: "AccentTheme.medinaEmerald.primaryHover")
+    public static let primaryHover = AccentTheme.medinaEmerald.primaryHover
+    @available(*, deprecated, renamed: "AccentTheme.medinaEmerald.primaryPressed")
+    public static let primaryPressed = AccentTheme.medinaEmerald.primaryPressed
+    @available(*, deprecated, renamed: "AccentTheme.medinaEmerald.primaryDisabled")
+    public static let primaryDisabled = AccentTheme.medinaEmerald.primaryDisabled
+    @available(*, deprecated, renamed: "AccentTheme.medinaEmerald.primarySubtleFill")
+    public static let primarySubtleFill = AccentTheme.medinaEmerald.primarySubtleFill
+}
+
 public enum SemanticColor {
-    public static let brand = AccentColor.primary
-    public static let brandSubtleFill = AccentColor.primarySubtleFill
+    public static let brand = AccentTheme.medinaEmerald.primary
+    public static let brandSubtleFill = AccentTheme.medinaEmerald.primarySubtleFill
 
     public static let discovery = Color(nsColor: .systemCyan)
     public static let discoverySubtleFill = Color(nsColor: .systemCyan).opacity(0.12)

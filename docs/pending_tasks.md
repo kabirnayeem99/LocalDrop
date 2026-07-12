@@ -1,6 +1,6 @@
 # LocalDrop Pending Tasks
 
-Last audited: July 11, 2026
+Last audited: July 12, 2026
 
 This document captures the current feature and UX gaps found from a code audit of the app. Items are ordered by recommended implementation approach, balancing blocker impact, user importance, and implementation complexity.
 
@@ -14,21 +14,17 @@ This document captures the current feature and UX gaps found from a code audit o
    - The device name is shown in settings as read-only text.
    - The protocol settings already carry a device name, but the app does not expose an editing flow.
 
-3. ~~Wire remaining settings that are stored but not connected to platform behavior.~~
-   - ~~`language` is persisted but has no localization wiring.~~
-   - ~~`accentColor` is editable in settings but is not applied broadly as a dynamic app-wide theme choice.~~
-
-4. Implement favorites / trusted devices as a real concept.
+3. Implement favorites / trusted devices as a real concept.
    - `QuickSaveMode.favorites` exists.
    - `Auto-accept from favorites` exists in settings.
    - There is no favorites model, no favorite-device management UI, and no runtime logic that enforces trusted senders.
    - This is conceptually larger and depends on product/runtime decisions, so it should follow the core workflow fixes.
 
-5. Implement pause receiving.
+4. Implement pause receiving.
    - `Pause Receiving` exists in the menu bar extra but is disabled.
    - There is no store/runtime API for pausing discovery or inbound acceptance without fully stopping the runtime.
 
-6. Run the UI/UX motion polish pass after the functional seams are real.
+5. Run the UI/UX motion polish pass after the functional seams are real.
    - Start with drop-zone drag feedback, device-card hover/press states, staged-file transitions, and transfer progress/completion polish.
    - Follow with the larger animation and semantic-color backlog once the underlying state changes are stable.
 
@@ -42,6 +38,7 @@ This document captures the current feature and UX gaps found from a code audit o
 - Added file/folder/text send entry points from the menu bar and app menu.
 - Wired `language` to localized strings via `Localizable.xcstrings` and extended `LanguageSetting` to the v1 supported-language set plus Uyghur, with endonyms and RTL awareness.
 - Wired `accentColor` to an environment-aware `AccentTheme` with system colors, eight named custom palettes, and a system-accent option; Medina Emerald is the default.
+- Added English-translation verification via `scripts/verify-featuretransfer-localizations.swift` and package-safe runtime localization fallback via `FeatureTransferLocalization`.
 
 ## Code Areas
 

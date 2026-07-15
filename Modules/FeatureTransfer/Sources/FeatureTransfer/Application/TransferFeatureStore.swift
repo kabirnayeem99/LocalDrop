@@ -1,5 +1,6 @@
 import AppKit
 import AppLogging
+import Dispatch
 import Foundation
 import Observation
 
@@ -38,6 +39,8 @@ final class TransferFeatureStore {
     private let historyPersistence: any HistoryPersisting
     private let loginItemManaging: any LoginItemManaging
     private let logger: AppLogger
+    private let progressReducer = TransferProgressReducer()
+    private let progressThrottleIntervalNanoseconds: UInt64
     static let maxHistoryEntries = 200
     private var runtimeStatusKey = "runtime.starting"
     private var hasStarted = false
@@ -47,6 +50,12 @@ final class TransferFeatureStore {
     nonisolated(unsafe) private var progressCompletionTask: Task<Void, Never>?
     @ObservationIgnored
     nonisolated(unsafe) private var feedbackDismissTask: Task<Void, Never>?
+    @ObservationIgnored
+    nonisolated(unsafe) private var pendingProgressEmissionTask: Task<Void, Never>?
+    @ObservationIgnored
+    nonisolated(unsafe) private var pendingProgressSnapshot: ActiveTransferProgress?
+    @ObservationIgnored
+    nonisolated(unsafe) private var authoritativeActiveTransfer: ActiveTransferProgress?
 
     init(
         runtime: any TransferRuntime,
@@ -54,6 +63,7 @@ final class TransferFeatureStore {
         historyPersistence: any HistoryPersisting,
         loginItemManaging: any LoginItemManaging,
         snapshot: TransferSettingsSnapshot,
+        progressThrottleIntervalNanoseconds: UInt64 = 0,
         logger: AppLogger = .disabled()
     ) {
         self.runtime = runtime
@@ -61,6 +71,7 @@ final class TransferFeatureStore {
         self.historyPersistence = historyPersistence
         self.loginItemManaging = loginItemManaging
         self.logger = logger
+        self.progressThrottleIntervalNanoseconds = progressThrottleIntervalNanoseconds
         self.quickSave = snapshot.quickSave
         self.appearance = snapshot.appearance
         self.accentColor = snapshot.accentColor
@@ -84,6 +95,7 @@ final class TransferFeatureStore {
         observationTasks.forEach { $0.cancel() }
         progressCompletionTask?.cancel()
         feedbackDismissTask?.cancel()
+        pendingProgressEmissionTask?.cancel()
     }
 
     var activeSheet: ActiveSheet? {
@@ -118,6 +130,7 @@ final class TransferFeatureStore {
         hasStarted = true
         bindRuntimeStreamsIfNeeded()
         setRuntimeStatus("runtime.starting")
+        let runtimeStartUptimeNanoseconds = DispatchTime.now().uptimeNanoseconds
         logger.emit(
             level: .info,
             event: "app.runtime.start.requested",
@@ -134,11 +147,15 @@ final class TransferFeatureStore {
             setRuntimeStatus("runtime.discoverable")
             logger.emit(
                 level: .info,
-                event: "app.runtime.start.succeeded",
+                event: "app.runtime.discoverable",
                 scope: "TransferFeatureStore",
                 attributes: [
                     .string("result", "success"),
-                    .string("runtime.status", runtimeStatusText)
+                    .string("runtime.status", runtimeStatusText),
+                    .double(
+                        "startup.runtime_start_elapsed_ms",
+                        Self.elapsedMilliseconds(since: runtimeStartUptimeNanoseconds)
+                    )
                 ]
             )
         } catch {
@@ -554,28 +571,61 @@ final class TransferFeatureStore {
                 let stream = await self.runtime.progressEvents()
                 for await event in stream {
                     switch event {
-                    case .updated(let progress):
-                        self.handleProgressUpdate(progress)
-                    case .terminal(let progress):
-                        self.handleProgressTerminal(progress)
+                    case .event(let rawEvent):
+                        await self.handleProgressEvent(rawEvent)
                     case .reset:
-                        self.resetActiveTransferState()
+                        await self.resetActiveTransferState()
                     }
                 }
             }
         ]
     }
 
-    private func handleProgressUpdate(_ progress: ActiveTransferProgress) {
+    private func handleProgressEvent(_ event: TransferProgressRawEvent) async {
+        cancelProgressCompletionTask()
+        let progress = await progressReducer.reduce(event)
+        authoritativeActiveTransfer = progress
+        if shouldBypassProgressThrottle(for: progress) {
+            cancelPendingProgressEmission()
+            applyDisplayedProgress(progress)
+            handleTerminalSideEffectsIfNeeded(progress)
+            return
+        }
+        queueDisplayedProgress(progress)
+    }
+
+    private func queueDisplayedProgress(_ progress: ActiveTransferProgress) {
+        pendingProgressSnapshot = progress
+        guard pendingProgressEmissionTask == nil else { return }
+        pendingProgressEmissionTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: self?.progressThrottleIntervalNanoseconds ?? 100_000_000)
+            guard let self else { return }
+            guard let pending = self.pendingProgressSnapshot else {
+                self.pendingProgressEmissionTask = nil
+                return
+            }
+            self.pendingProgressSnapshot = nil
+            self.pendingProgressEmissionTask = nil
+            self.applyDisplayedProgress(pending)
+        }
+    }
+
+    private func applyDisplayedProgress(_ progress: ActiveTransferProgress) {
         cancelProgressCompletionTask()
         activeTransfer = progress
     }
 
-    private func handleProgressTerminal(_ progress: ActiveTransferProgress) {
-        cancelProgressCompletionTask()
+    private func shouldBypassProgressThrottle(for progress: ActiveTransferProgress) -> Bool {
+        if progress.status.isTerminal {
+            return true
+        }
+        return progress.status == .running && progress.overallProgressValue == 1
+    }
+
+    private func handleTerminalSideEffectsIfNeeded(_ progress: ActiveTransferProgress) {
+        guard progress.status.isTerminal else { return }
         switch progress.status {
         case .completed:
-            activeTransfer = progress
             logger.emit(
                 level: .info,
                 event: progress.direction == .sending ? "transfer.send.completed" : "transfer.receive.completed",
@@ -594,9 +644,10 @@ final class TransferFeatureStore {
                     tone: .success
                 )
             )
-            appendHistoryEntry(Self.makeCompletedHistoryEntry(from: progress))
+            for entry in Self.makeCompletedHistoryEntries(from: progress) {
+                appendHistoryEntry(entry)
+            }
         case .canceled:
-            activeTransfer = nil
             showFeedback(
                 TransferFeedback(
                     message: FeatureTransferLocalization.string(forKey: "feedback.transferCanceled"),
@@ -604,8 +655,8 @@ final class TransferFeatureStore {
                     tone: .destructive
                 )
             )
+            scheduleTerminalDismissal()
         case .failed:
-            activeTransfer = nil
             showFeedback(
                 TransferFeedback(
                     message: "Transfer failed",
@@ -613,19 +664,39 @@ final class TransferFeatureStore {
                     tone: .destructive
                 )
             )
+            scheduleTerminalDismissal()
         case .running:
-            activeTransfer = progress
+            break
         }
     }
 
-    private func resetActiveTransferState() {
+    private func scheduleTerminalDismissal() {
+        progressCompletionTask?.cancel()
+        progressCompletionTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            guard !Task.isCancelled else { return }
+            self?.activeTransfer = nil
+            self?.authoritativeActiveTransfer = nil
+        }
+    }
+
+    private func resetActiveTransferState() async {
+        cancelPendingProgressEmission()
         cancelProgressCompletionTask()
+        authoritativeActiveTransfer = nil
         activeTransfer = nil
+        await progressReducer.reset()
     }
 
     private func cancelProgressCompletionTask() {
         progressCompletionTask?.cancel()
         progressCompletionTask = nil
+    }
+
+    private func cancelPendingProgressEmission() {
+        pendingProgressEmissionTask?.cancel()
+        pendingProgressEmissionTask = nil
+        pendingProgressSnapshot = nil
     }
 
     private func showFeedback(_ newFeedback: TransferFeedback) {
@@ -682,19 +753,23 @@ final class TransferFeatureStore {
         )
     }
 
-    private static func makeCompletedHistoryEntry(from progress: ActiveTransferProgress) -> HistoryEntry {
-        let size = progress.byteCount.map {
-            ByteCountFormatter.string(fromByteCount: $0, countStyle: .file)
-        } ?? "—"
-        return HistoryEntry(
-            fileName: progress.fileName,
-            counterpart: progress.counterpartName,
-            size: size,
-            timestamp: Date(),
-            direction: progress.direction == .sending ? .sent : .received,
-            outcome: .completed,
-            fileURL: progress.fileURL
-        )
+    private static func makeCompletedHistoryEntries(from progress: ActiveTransferProgress) -> [HistoryEntry] {
+        progress.files
+            .filter { $0.status == .completed }
+            .map { file in
+                let size = file.effectiveTotalBytesForDisplay.map {
+                    ByteCountFormatter.string(fromByteCount: $0, countStyle: .file)
+                } ?? "—"
+                return HistoryEntry(
+                    fileName: file.fileName,
+                    counterpart: progress.counterpartName,
+                    size: size,
+                    timestamp: Date(),
+                    direction: progress.direction == .sending ? .sent : .received,
+                    outcome: .completed,
+                    fileURL: file.fileURL
+                )
+            }
     }
 
     private static func makeStagedItem(url: URL) -> StagedTransferItem {
@@ -721,5 +796,9 @@ final class TransferFeatureStore {
             fileTypeSymbol: values?.isDirectory == true ? "folder.fill" : "doc.fill",
             byteCount: byteCount
         )
+    }
+
+    private nonisolated static func elapsedMilliseconds(since startUptimeNanoseconds: UInt64) -> Double {
+        Double(DispatchTime.now().uptimeNanoseconds - startUptimeNanoseconds) / 1_000_000
     }
 }

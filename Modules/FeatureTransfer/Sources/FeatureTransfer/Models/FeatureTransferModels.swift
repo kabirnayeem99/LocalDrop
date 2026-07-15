@@ -231,35 +231,161 @@ extension Collection where Element == StagedTransferItem {
     }
 }
 
+enum TransferETA: Equatable, Sendable {
+    case none
+    case calculating
+    case stalled
+    case estimated(seconds: TimeInterval)
+
+    var descriptionText: String? {
+        switch self {
+        case .none:
+            return nil
+        case .calculating:
+            return "Calculating…"
+        case .stalled:
+            return "Stalled"
+        case .estimated(let seconds):
+            let formatter = DateComponentsFormatter()
+            formatter.allowedUnits = seconds >= 3600 ? [.hour, .minute] : [.minute, .second]
+            formatter.unitsStyle = .abbreviated
+            formatter.maximumUnitCount = 2
+            formatter.zeroFormattingBehavior = [.dropLeading, .dropMiddle]
+            return formatter.string(from: max(seconds, 1))
+        }
+    }
+}
+
 struct TransferFileProgress: Identifiable, Equatable, Sendable {
     enum Status: Sendable {
-        case pending
-        case running
+        case queued
+        case transferring
         case completed
         case failed
         case canceled
+        case retrying
+
+        static var pending: Self { .queued }
+        static var running: Self { .transferring }
+
+        var isTerminal: Bool {
+            switch self {
+            case .completed, .failed, .canceled:
+                return true
+            case .queued, .transferring, .retrying:
+                return false
+            }
+        }
     }
 
     let id: String
     let fileName: String
-    let totalBytes: Int64?
-    let transferredBytes: Int64?
+    let attemptIndex: Int
     let status: Status
+    let totalBytes: Int64?
+    let effectiveTotalBytesForDisplay: Int64?
+    let actualTransferredBytes: Int64
+    let displayedTransferredBytes: Int64
+    let completedBytesContribution: Int64
+    let failedBytesContribution: Int64
+    let lastEventSequence: Int64
+    let lastProgressAtMonotonic: TimeInterval
+    let errorSummary: String?
+    let fileURL: URL?
+    let order: Int
+
+    init(
+        id: String,
+        fileName: String,
+        attemptIndex: Int = 0,
+        status: Status,
+        totalBytes: Int64? = nil,
+        effectiveTotalBytesForDisplay: Int64? = nil,
+        actualTransferredBytes: Int64 = 0,
+        displayedTransferredBytes: Int64 = 0,
+        completedBytesContribution: Int64 = 0,
+        failedBytesContribution: Int64 = 0,
+        lastEventSequence: Int64 = 0,
+        lastProgressAtMonotonic: TimeInterval = 0,
+        errorSummary: String? = nil,
+        fileURL: URL? = nil,
+        order: Int = 0
+    ) {
+        self.id = id
+        self.fileName = fileName
+        self.attemptIndex = attemptIndex
+        self.status = status
+        self.totalBytes = totalBytes
+        self.effectiveTotalBytesForDisplay = effectiveTotalBytesForDisplay ?? totalBytes
+        self.actualTransferredBytes = max(actualTransferredBytes, 0)
+        self.displayedTransferredBytes = max(displayedTransferredBytes, 0)
+        self.completedBytesContribution = max(completedBytesContribution, 0)
+        self.failedBytesContribution = max(failedBytesContribution, 0)
+        self.lastEventSequence = lastEventSequence
+        self.lastProgressAtMonotonic = lastProgressAtMonotonic
+        self.errorSummary = errorSummary
+        self.fileURL = fileURL
+        self.order = order
+    }
+
+    var transferredBytes: Int64? {
+        status == .queued ? 0 : displayedTransferredBytes
+    }
+
+    var hasKnownTotal: Bool {
+        if let effectiveTotalBytesForDisplay {
+            return effectiveTotalBytesForDisplay > 0
+        }
+        return false
+    }
+
+    var determinateProgress: Double? {
+        guard let total = effectiveTotalBytesForDisplay, total > 0 else {
+            return status == .completed ? 1 : nil
+        }
+        let transferred = min(max(displayedTransferredBytes, 0), total)
+        return min(max(Double(transferred) / Double(total), 0), 1)
+    }
 
     var progress: Double {
-        if status == .completed {
-            return 1
-        }
-        guard let totalBytes, totalBytes > 0 else { return 0 }
-        let transferred = min(max(transferredBytes ?? 0, 0), totalBytes)
-        return min(max(Double(transferred) / Double(totalBytes), 0), 1)
+        determinateProgress ?? (status == .completed ? 1 : 0)
     }
 
     var stablePercent: Int {
         if status == .completed {
             return 100
         }
-        return min(max(Int((progress * 100).rounded(.down)), 0), 99)
+        guard let determinateProgress else { return 0 }
+        return min(max(Int((determinateProgress * 100).rounded(.down)), 0), 99)
+    }
+
+    var byteProgressLabel: String {
+        let transferredLabel = ByteCountFormatter.string(
+            fromByteCount: displayedTransferredBytes,
+            countStyle: .file
+        )
+        guard let total = effectiveTotalBytesForDisplay, total > 0 else {
+            return transferredLabel
+        }
+        let totalLabel = ByteCountFormatter.string(fromByteCount: total, countStyle: .file)
+        return "\(transferredLabel) / \(totalLabel)"
+    }
+
+    var statusLabel: String {
+        switch status {
+        case .queued:
+            return "Queued"
+        case .transferring:
+            return FeatureTransferLocalization.string(forKey: "transfer.progress.sending")
+        case .completed:
+            return FeatureTransferLocalization.string(forKey: "transfer.progress.done")
+        case .failed:
+            return "Failed"
+        case .canceled:
+            return FeatureTransferLocalization.string(forKey: "transfer.status.canceled")
+        case .retrying:
+            return "Retrying"
+        }
     }
 }
 
@@ -274,28 +400,65 @@ struct ActiveTransferProgress: Identifiable, Equatable, Sendable {
         case completed
         case failed
         case canceled
+
+        var isTerminal: Bool {
+            switch self {
+            case .completed, .failed, .canceled:
+                return true
+            case .running:
+                return false
+            }
+        }
     }
 
     typealias ID = String
 
     let id: ID
+    let attemptID: String
     let direction: Direction
     let counterpartName: String
     let counterpartKind: DeviceKind
-    let fileName: String
-    let progress: Double
-    let throughput: String
-    let etaDescription: String
-    let byteCount: Int64?
-    let fileURL: URL?
-    let totalBytes: Int64?
-    let transferredBytes: Int64?
-    let fileProgress: [TransferFileProgress]
-    let totalItemCount: Int?
-    let currentItemIndex: Int?
-    let currentFileTotalBytes: Int64?
-    let currentFileTransferredBytes: Int64?
     let status: Status
+    let files: [TransferFileProgress]
+    let totalBytesKnown: Int64?
+    let displayableTransferredBytes: Int64
+    let actualTransferredBytes: Int64
+    let smoothedBytesPerSecond: Double?
+    let eta: TransferETA
+    let startedAtMonotonic: TimeInterval
+    let lastProgressAtMonotonic: TimeInterval
+
+    init(
+        id: ID,
+        attemptID: String,
+        direction: Direction,
+        counterpartName: String,
+        counterpartKind: DeviceKind = .generic,
+        status: Status = .running,
+        files: [TransferFileProgress],
+        totalBytesKnown: Int64? = nil,
+        displayableTransferredBytes: Int64 = 0,
+        actualTransferredBytes: Int64 = 0,
+        smoothedBytesPerSecond: Double? = nil,
+        eta: TransferETA = .none,
+        startedAtMonotonic: TimeInterval = 0,
+        lastProgressAtMonotonic: TimeInterval = 0
+    ) {
+        self.id = id
+        self.attemptID = attemptID
+        self.direction = direction
+        self.counterpartName = counterpartName
+        self.counterpartKind = counterpartKind
+        self.status = status
+        self.files = files.sorted { $0.order < $1.order }
+        self.totalBytesKnown = totalBytesKnown
+        self.displayableTransferredBytes = max(displayableTransferredBytes, 0)
+        self.actualTransferredBytes = max(actualTransferredBytes, 0)
+        self.smoothedBytesPerSecond = smoothedBytesPerSecond
+        self.eta = eta
+        self.startedAtMonotonic = startedAtMonotonic
+        self.lastProgressAtMonotonic = lastProgressAtMonotonic
+    }
 
     init(
         id: ID,
@@ -317,98 +480,187 @@ struct ActiveTransferProgress: Identifiable, Equatable, Sendable {
         currentFileTransferredBytes: Int64? = nil,
         status: Status = .running
     ) {
-        self.id = id
-        self.direction = direction
-        self.counterpartName = counterpartName
-        self.counterpartKind = counterpartKind
-        self.fileName = fileName
-        self.progress = progress
-        self.throughput = throughput
-        self.etaDescription = etaDescription
-        self.byteCount = byteCount
-        self.fileURL = fileURL
-        self.totalBytes = totalBytes
-        self.transferredBytes = transferredBytes
-        self.fileProgress = fileProgress
-        self.totalItemCount = totalItemCount
-        self.currentItemIndex = currentItemIndex
-        self.currentFileTotalBytes = currentFileTotalBytes
-        self.currentFileTransferredBytes = currentFileTransferredBytes
-        self.status = status
+        let resolvedFiles: [TransferFileProgress]
+        if fileProgress.isEmpty == false {
+            resolvedFiles = fileProgress.enumerated().map { index, item in
+                TransferFileProgress(
+                    id: item.id,
+                    fileName: item.fileName,
+                    attemptIndex: item.attemptIndex,
+                    status: item.status,
+                    totalBytes: item.totalBytes,
+                    effectiveTotalBytesForDisplay: item.effectiveTotalBytesForDisplay,
+                    actualTransferredBytes: item.actualTransferredBytes,
+                    displayedTransferredBytes: item.displayedTransferredBytes,
+                    completedBytesContribution: item.completedBytesContribution,
+                    failedBytesContribution: item.failedBytesContribution,
+                    lastEventSequence: item.lastEventSequence,
+                    lastProgressAtMonotonic: item.lastProgressAtMonotonic,
+                    errorSummary: item.errorSummary,
+                    fileURL: item.fileURL,
+                    order: item.order == 0 ? index : item.order
+                )
+            }
+        } else {
+            let fallbackStatus: TransferFileProgress.Status
+            switch status {
+            case .running:
+                fallbackStatus = .transferring
+            case .completed:
+                fallbackStatus = .completed
+            case .failed:
+                fallbackStatus = .failed
+            case .canceled:
+                fallbackStatus = .canceled
+            }
+            let resolvedTransferred = currentFileTransferredBytes ?? transferredBytes ?? {
+                guard let totalBytes else { return 0 }
+                return Int64(Double(totalBytes) * min(max(progress, 0), 1))
+            }()
+            let resolvedTotalItemCount = max(totalItemCount ?? 1, 1)
+            let resolvedCurrentItemIndex = min(max(currentItemIndex ?? 1, 1), resolvedTotalItemCount)
+            resolvedFiles = (0..<resolvedTotalItemCount).map { index in
+                let itemIndex = index + 1
+                let itemStatus: TransferFileProgress.Status
+                let itemName: String
+                let itemTransferredBytes: Int64
+                let itemTotalBytes: Int64?
+
+                if itemIndex < resolvedCurrentItemIndex {
+                    itemStatus = .completed
+                    itemName = "Completed Item \(itemIndex)"
+                    itemTotalBytes = byteCount
+                    itemTransferredBytes = byteCount ?? 0
+                } else if itemIndex == resolvedCurrentItemIndex {
+                    itemStatus = fallbackStatus
+                    itemName = fileName
+                    let fallbackTotal = ((currentFileTotalBytes ?? 0) > 0 ? currentFileTotalBytes : byteCount)
+                    itemTotalBytes = fallbackTotal
+                    itemTransferredBytes = max(resolvedTransferred, 0)
+                } else {
+                    itemStatus = .queued
+                    itemName = "Queued Item \(itemIndex)"
+                    itemTotalBytes = nil
+                    itemTransferredBytes = 0
+                }
+
+                return TransferFileProgress(
+                    id: itemIndex == resolvedCurrentItemIndex ? fileName : "\(fileName)-\(itemIndex)",
+                    fileName: itemName,
+                    status: itemStatus,
+                    totalBytes: itemTotalBytes,
+                    effectiveTotalBytesForDisplay: itemTotalBytes.flatMap { $0 > 0 ? max($0, itemTransferredBytes) : nil },
+                    actualTransferredBytes: itemTransferredBytes,
+                    displayedTransferredBytes: itemTransferredBytes,
+                    completedBytesContribution: itemStatus == .completed ? max(itemTransferredBytes, itemTotalBytes ?? 0) : 0,
+                    failedBytesContribution: (itemStatus == .failed || itemStatus == .canceled) ? itemTransferredBytes : 0,
+                    fileURL: itemIndex == resolvedCurrentItemIndex ? fileURL : nil,
+                    order: index
+                )
+            }
+        }
+
+        self.init(
+            id: id,
+            attemptID: id,
+            direction: direction,
+            counterpartName: counterpartName,
+            counterpartKind: counterpartKind,
+            status: status,
+            files: resolvedFiles,
+            totalBytesKnown: totalBytes,
+            displayableTransferredBytes: transferredBytes ?? 0,
+            actualTransferredBytes: transferredBytes ?? 0,
+            smoothedBytesPerSecond: nil,
+            eta: etaDescription.isEmpty ? .none : .calculating,
+            startedAtMonotonic: 0,
+            lastProgressAtMonotonic: 0
+        )
     }
 }
 
 extension ActiveTransferProgress {
-    var resolvedFileProgress: [TransferFileProgress] {
-        if fileProgress.isEmpty == false {
-            return fileProgress
-        }
-        let fallbackStatus: TransferFileProgress.Status
-        switch status {
-        case .running:
-            fallbackStatus = .running
-        case .completed:
-            fallbackStatus = .completed
-        case .failed:
-            fallbackStatus = .failed
-        case .canceled:
-            fallbackStatus = .canceled
-        }
-        return [
-            TransferFileProgress(
-                id: fileName,
-                fileName: fileName,
-                totalBytes: {
-                    if let currentFileTotalBytes, currentFileTotalBytes > 0 {
-                        return currentFileTotalBytes
-                    }
-                    return byteCount
-                }(),
-                transferredBytes: currentFileTransferredBytes ?? transferredBytes,
-                status: fallbackStatus
-            )
-        ]
-    }
+    var resolvedFileProgress: [TransferFileProgress] { files }
+
+    var totalItemCount: Int? { files.count }
 
     var resolvedTotalItemCount: Int {
-        max(totalItemCount ?? 1, 1)
+        max(files.count, 1)
+    }
+
+    var currentFile: TransferFileProgress? {
+        files.first { $0.status == .transferring || $0.status == .retrying }
+            ?? files.first { $0.status == .queued }
+            ?? files.last
+    }
+
+    var currentItemIndex: Int? {
+        guard let currentFile else { return nil }
+        return (files.firstIndex(where: { $0.id == currentFile.id }) ?? 0) + 1
     }
 
     var resolvedCurrentItemIndex: Int {
-        min(max(currentItemIndex ?? 1, 1), resolvedTotalItemCount)
-    }
-
-    var overallProgress: Double {
-        if status == .completed {
-            return 1
-        }
-        if let totalBytes, totalBytes > 0 {
-            let transferred = min(max(transferredBytes ?? 0, 0), totalBytes)
-            return min(max(Double(transferred) / Double(totalBytes), 0), 1)
-        }
-        return min(max(progress, 0), 1)
-    }
-
-    var currentFileProgress: Double {
-        if status == .completed {
-            return 1
-        }
-        if let currentFileTotalBytes, currentFileTotalBytes > 0 {
-            let transferred = min(max(currentFileTransferredBytes ?? 0, 0), currentFileTotalBytes)
-            return min(max(Double(transferred) / Double(currentFileTotalBytes), 0), 1)
-        }
-        return overallProgress
-    }
-
-    var currentFileStablePercent: Int {
-        if status == .completed {
-            return 100
-        }
-        return min(max(Int((currentFileProgress * 100).rounded(.down)), 0), 99)
+        min(max(currentItemIndex ?? resolvedTotalItemCount, 1), resolvedTotalItemCount)
     }
 
     var remainingItemCount: Int {
         max(resolvedTotalItemCount - resolvedCurrentItemIndex, 0)
+    }
+
+    var fileName: String {
+        currentFile?.fileName ?? counterpartName
+    }
+
+    var byteCount: Int64? {
+        currentFile?.totalBytes
+    }
+
+    var fileURL: URL? {
+        currentFile?.fileURL
+    }
+
+    var totalBytes: Int64? { totalBytesKnown }
+
+    var transferredBytes: Int64? { displayableTransferredBytes }
+
+    var currentFileTotalBytes: Int64? {
+        currentFile?.effectiveTotalBytesForDisplay
+    }
+
+    var currentFileTransferredBytes: Int64? {
+        currentFile?.displayedTransferredBytes
+    }
+
+    var overallProgressValue: Double? {
+        guard let totalBytesKnown, totalBytesKnown > 0 else {
+            return status == .completed ? 1 : nil
+        }
+        let transferred = min(max(displayableTransferredBytes, 0), totalBytesKnown)
+        return min(max(Double(transferred) / Double(totalBytesKnown), 0), 1)
+    }
+
+    var overallProgress: Double {
+        overallProgressValue ?? (status == .completed ? 1 : 0)
+    }
+
+    var currentFileProgressValue: Double? {
+        currentFile?.determinateProgress
+    }
+
+    var currentFileProgress: Double {
+        currentFileProgressValue ?? overallProgress
+    }
+
+    var stablePercent: Int {
+        if status == .completed {
+            return 100
+        }
+        guard let overallProgressValue else { return 0 }
+        return min(max(Int((overallProgressValue * 100).rounded(.down)), 0), 99)
+    }
+
+    var currentFileStablePercent: Int {
+        currentFile?.stablePercent ?? stablePercent
     }
 
     var batchPositionLabel: String? {
@@ -420,11 +672,53 @@ extension ActiveTransferProgress {
         )
     }
 
-    var stablePercent: Int {
-        if status == .completed {
-            return 100
+    var activeFileCount: Int {
+        files.filter { $0.status == .transferring || $0.status == .retrying }.count
+    }
+
+    var hasKnownTotal: Bool {
+        if let totalBytesKnown {
+            return totalBytesKnown > 0
         }
-        return min(max(Int((overallProgress * 100).rounded(.down)), 0), 99)
+        return false
+    }
+
+    var aggregateByteProgressLabel: String {
+        let transferredLabel = ByteCountFormatter.string(
+            fromByteCount: displayableTransferredBytes,
+            countStyle: .file
+        )
+        guard let totalBytesKnown, totalBytesKnown > 0 else {
+            return transferredLabel
+        }
+        let totalLabel = ByteCountFormatter.string(fromByteCount: totalBytesKnown, countStyle: .file)
+        return "\(transferredLabel) / \(totalLabel)"
+    }
+
+    var speedLabel: String? {
+        guard let smoothedBytesPerSecond, smoothedBytesPerSecond >= 1 else { return nil }
+        let unitsPerSecond = ByteCountFormatter.string(
+            fromByteCount: Int64(smoothedBytesPerSecond.rounded()),
+            countStyle: .file
+        )
+        return "\(unitsPerSecond)/s"
+    }
+
+    var etaLabel: String? {
+        eta.descriptionText
+    }
+
+    var secondaryStatusLine: String? {
+        switch (speedLabel, etaLabel) {
+        case let (.some(speed), .some(eta)):
+            return "\(speed) • ETA \(eta)"
+        case let (.some(speed), nil):
+            return speed
+        case let (nil, .some(eta)):
+            return "ETA \(eta)"
+        case (nil, nil):
+            return nil
+        }
     }
 }
 

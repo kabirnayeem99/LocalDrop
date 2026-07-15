@@ -224,12 +224,17 @@ extension ActiveTransferProgress {
         let action = direction == .sending
             ? FeatureTransferLocalization.string(forKey: "transfer.progress.sending")
             : FeatureTransferLocalization.string(forKey: "transfer.progress.receiving")
-        let itemTitle = if let batchPositionLabel {
-            "\(batchPositionLabel) · \(fileName)"
+        let itemTitle: String
+        if files.count > 1 {
+            let completedCount = files.filter { $0.status == .completed }.count
+            itemTitle = "\(completedCount) of \(files.count) completed"
         } else {
-            fileName
+            itemTitle = fileName
         }
-        return FeatureTransferLocalization.format("transfer.progress.menuTitleFormat", action, itemTitle, stablePercent)
+        if hasKnownTotal {
+            return FeatureTransferLocalization.format("transfer.progress.menuTitleFormat", action, itemTitle, stablePercent)
+        }
+        return "\(action) · \(itemTitle)"
     }
 }
 

@@ -140,7 +140,131 @@ final class FeatureTransferTests: XCTestCase {
         XCTAssertEqual(row?.stablePercent, 50)
     }
 
-    func testCompletedTerminalEventAppendsHistoryOnceAndAutoDismisses() async {
+    func testTransferProgressReducerClampsOutOfOrderLowerProgress() async {
+        let reducer = TransferProgressReducer()
+        let started = await reducer.reduce(
+            makeRawProgressEvent(
+                kind: .transferStarted,
+                transferID: "t-1",
+                files: [makeRawFile(id: "f-1", name: "archive.zip", state: .queued, totalBytes: 1_000, transferredBytes: 0)],
+                totalBytesKnown: 1_000,
+                actualTransferredBytes: 0,
+                time: 1
+            )
+        )
+        XCTAssertEqual(started.displayableTransferredBytes, 0)
+
+        let progressed = await reducer.reduce(
+            makeRawProgressEvent(
+                kind: .snapshot,
+                transferID: "t-1",
+                files: [makeRawFile(id: "f-1", name: "archive.zip", state: .transferring, totalBytes: 1_000, transferredBytes: 600)],
+                totalBytesKnown: 1_000,
+                actualTransferredBytes: 600,
+                time: 2
+            )
+        )
+        XCTAssertEqual(progressed.displayableTransferredBytes, 600)
+        XCTAssertEqual(progressed.files.first?.displayedTransferredBytes, 600)
+
+        let regressed = await reducer.reduce(
+            makeRawProgressEvent(
+                kind: .snapshot,
+                transferID: "t-1",
+                files: [makeRawFile(id: "f-1", name: "archive.zip", state: .transferring, totalBytes: 500, transferredBytes: 200)],
+                totalBytesKnown: 500,
+                actualTransferredBytes: 200,
+                time: 3
+            )
+        )
+        XCTAssertEqual(regressed.displayableTransferredBytes, 600)
+        XCTAssertEqual(regressed.files.first?.displayedTransferredBytes, 600)
+        XCTAssertEqual(regressed.files.first?.effectiveTotalBytesForDisplay, 600)
+    }
+
+    func testTransferProgressReducerKeepsCompletedRowsVisibleAcrossSequentialBatch() async {
+        let reducer = TransferProgressReducer()
+
+        _ = await reducer.reduce(
+            makeRawProgressEvent(
+                kind: .transferStarted,
+                transferID: "t-2",
+                files: [
+                    makeRawFile(id: "f-1", name: "one.txt", state: .queued, totalBytes: 100, transferredBytes: 0, order: 0),
+                    makeRawFile(id: "f-2", name: "two.txt", state: .queued, totalBytes: 100, transferredBytes: 0, order: 1)
+                ],
+                totalBytesKnown: 200,
+                actualTransferredBytes: 0,
+                time: 1
+            )
+        )
+
+        let firstComplete = await reducer.reduce(
+            makeRawProgressEvent(
+                kind: .snapshot,
+                transferID: "t-2",
+                files: [
+                    makeRawFile(id: "f-1", name: "one.txt", state: .completed, totalBytes: 100, transferredBytes: 100, order: 0),
+                    makeRawFile(id: "f-2", name: "two.txt", state: .transferring, totalBytes: 100, transferredBytes: 40, order: 1)
+                ],
+                totalBytesKnown: 200,
+                actualTransferredBytes: 140,
+                time: 2
+            )
+        )
+
+        XCTAssertEqual(firstComplete.files.map(\.status), [.completed, .transferring])
+        XCTAssertEqual(firstComplete.displayableTransferredBytes, 140)
+    }
+
+    func testStoreThrottlesBurstyProgressEventsAndEmitsLatestSnapshot() async {
+        let runtime = FakeTransferRuntime()
+        let store = TransferFeatureStore(
+            runtime: runtime,
+            settingsPersistence: InMemorySettingsPersistence(),
+            historyPersistence: InMemoryHistoryPersistence(),
+            loginItemManaging: FakeLoginItemManaging(),
+            snapshot: .default(
+                deviceName: "LocalDrop Test Mac",
+                saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
+            ),
+            progressThrottleIntervalNanoseconds: 100_000_000
+        )
+
+        await store.start()
+        await runtime.emitProgress(
+            ActiveTransferProgress(
+                id: "throttle-1",
+                direction: .sending,
+                counterpartName: "Peer",
+                fileName: "a.bin",
+                progress: 0.1,
+                throughput: "10 KB/s",
+                etaDescription: "Soon",
+                totalBytes: 1_000,
+                transferredBytes: 100
+            )
+        )
+        await runtime.emitProgress(
+            ActiveTransferProgress(
+                id: "throttle-1",
+                direction: .sending,
+                counterpartName: "Peer",
+                fileName: "a.bin",
+                progress: 0.4,
+                throughput: "40 KB/s",
+                etaDescription: "Soon",
+                totalBytes: 1_000,
+                transferredBytes: 400
+            )
+        )
+
+        XCTAssertNil(store.activeTransfer)
+        try? await Task.sleep(nanoseconds: 150_000_000)
+        XCTAssertEqual(store.activeTransfer?.displayableTransferredBytes, 400)
+    }
+
+    func testCompletedTerminalEventAppendsHistoryAndKeepsCompletedBatchVisible() async {
         let runtime = FakeTransferRuntime()
         let historyPersistence = InMemoryHistoryPersistence(entries: [])
         let store = TransferFeatureStore(
@@ -174,8 +298,8 @@ final class FeatureTransferTests: XCTestCase {
         )
 
         await runtime.emitTerminalProgress(progress)
-        await waitUntil { store.historyEntries.count == 1 }
-        XCTAssertEqual(store.historyEntries.first?.fileName, "report.pdf")
+        await waitUntil { store.historyEntries.count == 3 }
+        XCTAssertTrue(store.historyEntries.contains(where: { $0.fileName == "report.pdf" }))
         XCTAssertEqual(store.feedback?.tone, .success)
         XCTAssertEqual(store.activeTransfer?.batchPositionLabel, "File 3 of 3")
         XCTAssertEqual(store.activeTransfer?.remainingItemCount, 0)
@@ -183,7 +307,7 @@ final class FeatureTransferTests: XCTestCase {
         XCTAssertEqual(store.activeTransfer?.id, "done-1")
     }
 
-    func testCanceledAndFailedTerminalEventsClearActiveTransferImmediately() async {
+    func testCanceledAndFailedTerminalEventsPreserveTerminalStateBeforeDismissal() async {
         let runtime = FakeTransferRuntime()
         let historyPersistence = InMemoryHistoryPersistence(entries: [])
         let store = TransferFeatureStore(
@@ -224,8 +348,10 @@ final class FeatureTransferTests: XCTestCase {
                 status: .canceled
             )
         )
-        await waitUntil { store.activeTransfer == nil }
+        await waitUntil { store.activeTransfer?.status == .canceled }
         XCTAssertEqual(store.feedback?.message, FeatureTransferLocalization.string(forKey: "feedback.transferCanceled"))
+        try? await Task.sleep(nanoseconds: 1_300_000_000)
+        XCTAssertNil(store.activeTransfer)
 
         await runtime.emitProgress(
             ActiveTransferProgress(
@@ -253,9 +379,11 @@ final class FeatureTransferTests: XCTestCase {
                 status: .failed
             )
         )
-        await waitUntil { store.activeTransfer == nil }
+        await waitUntil { store.activeTransfer?.status == .failed }
         XCTAssertEqual(store.feedback?.message, "Transfer failed")
         XCTAssertTrue(store.historyEntries.isEmpty)
+        try? await Task.sleep(nanoseconds: 1_300_000_000)
+        XCTAssertNil(store.activeTransfer)
     }
 
     func testProgressResetClearsStaleActiveTransferState() async {
@@ -614,7 +742,7 @@ final class FeatureTransferTests: XCTestCase {
         await waitUntil { store.activeTransfer != nil }
 
         XCTAssertEqual(store.menuSummary.statusSymbol, "paperplane.fill")
-        XCTAssertEqual(store.menuSummary.activeTransferTitle, "Sending File 2 of 3 · report.pdf 42%")
+        XCTAssertEqual(store.menuSummary.activeTransferTitle, "Sending · 1 of 3 completed")
 
         await runtime.emitIncomingRequest(
             IncomingTransferRequest(
@@ -1257,7 +1385,7 @@ final class FeatureTransferTests: XCTestCase {
                 return nil
             }
             return eventNames.contains("app.runtime.start.requested")
-                && eventNames.contains("app.runtime.start.succeeded")
+                && eventNames.contains("app.runtime.discoverable")
                 && eventNames.contains("transfer.stage.completed")
                 && eventNames.contains("transfer.send.requested")
                 && eventNames.contains("settings.runtime_update.failed")
@@ -1270,7 +1398,7 @@ final class FeatureTransferTests: XCTestCase {
             return nil
         }
         XCTAssertTrue(eventNames.contains("app.runtime.start.requested"))
-        XCTAssertTrue(eventNames.contains("app.runtime.start.succeeded"))
+        XCTAssertTrue(eventNames.contains("app.runtime.discoverable"))
         XCTAssertTrue(eventNames.contains("transfer.stage.completed"))
         XCTAssertTrue(eventNames.contains("transfer.send.requested"))
         XCTAssertTrue(eventNames.contains("settings.runtime_update.failed"))
@@ -1476,6 +1604,50 @@ final class FeatureTransferTests: XCTestCase {
             direction: direction,
             outcome: outcome,
             fileURL: fileURL
+        )
+    }
+
+    private func makeRawProgressEvent(
+        kind: TransferProgressRawEvent.Kind,
+        transferID: String,
+        files: [TransferProgressRawFile],
+        totalBytesKnown: Int64?,
+        actualTransferredBytes: Int64,
+        time: TimeInterval
+    ) -> TransferProgressRawEvent {
+        TransferProgressRawEvent(
+            kind: kind,
+            transferID: transferID,
+            attemptID: transferID,
+            direction: .sending,
+            counterpartName: "Peer",
+            counterpartKind: .generic,
+            sequenceNumber: Int64(time),
+            eventMonotonicTime: time,
+            files: files,
+            totalBytesKnown: totalBytesKnown,
+            actualTransferredBytes: actualTransferredBytes
+        )
+    }
+
+    private func makeRawFile(
+        id: String,
+        name: String,
+        state: TransferFileProgress.Status,
+        totalBytes: Int64?,
+        transferredBytes: Int64,
+        order: Int = 0
+    ) -> TransferProgressRawFile {
+        TransferProgressRawFile(
+            fileID: id,
+            displayName: name,
+            fileURL: nil,
+            order: order,
+            attemptIndex: 0,
+            state: state,
+            declaredTotalBytes: totalBytes,
+            actualTransferredBytes: transferredBytes,
+            errorSummary: nil
         )
     }
 
@@ -1794,15 +1966,57 @@ private actor FakeTransferRuntime: TransferRuntime {
     }
 
     func emitProgress(_ progress: ActiveTransferProgress) async {
-        await progressBroadcaster.yield(.updated(progress))
+        await progressBroadcaster.yield(.event(Self.makeRawEvent(from: progress, kind: .snapshot)))
     }
 
     func emitTerminalProgress(_ progress: ActiveTransferProgress) async {
-        await progressBroadcaster.yield(.terminal(progress))
+        let kind: TransferProgressRawEvent.Kind
+        switch progress.status {
+        case .running:
+            kind = .snapshot
+        case .completed:
+            kind = .transferCompleted
+        case .failed:
+            kind = .transferFailed
+        case .canceled:
+            kind = .transferCanceled
+        }
+        await progressBroadcaster.yield(.event(Self.makeRawEvent(from: progress, kind: kind)))
     }
 
     func emitProgressReset() async {
         await progressBroadcaster.yield(.reset)
+    }
+
+    private static func makeRawEvent(
+        from progress: ActiveTransferProgress,
+        kind: TransferProgressRawEvent.Kind
+    ) -> TransferProgressRawEvent {
+        TransferProgressRawEvent(
+            kind: kind,
+            transferID: progress.id,
+            attemptID: progress.attemptID,
+            direction: progress.direction,
+            counterpartName: progress.counterpartName,
+            counterpartKind: progress.counterpartKind,
+            sequenceNumber: 1,
+            eventMonotonicTime: ProcessInfo.processInfo.systemUptime,
+            files: progress.files.enumerated().map { index, file in
+                TransferProgressRawFile(
+                    fileID: file.id,
+                    displayName: file.fileName,
+                    fileURL: file.fileURL,
+                    order: index,
+                    attemptIndex: file.attemptIndex,
+                    state: file.status,
+                    declaredTotalBytes: file.totalBytes,
+                    actualTransferredBytes: file.actualTransferredBytes,
+                    errorSummary: file.errorSummary
+                )
+            },
+            totalBytesKnown: progress.totalBytesKnown,
+            actualTransferredBytes: progress.actualTransferredBytes
+        )
     }
 }
 

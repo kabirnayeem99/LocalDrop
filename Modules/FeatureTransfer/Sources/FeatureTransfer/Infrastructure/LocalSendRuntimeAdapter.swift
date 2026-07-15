@@ -1,4 +1,5 @@
 import AppLogging
+import Dispatch
 import Foundation
 import LocalSendKit
 import UniformTypeIdentifiers
@@ -26,6 +27,7 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
     private var emittedReceivedFileKeys: Set<String> = []
     private var emittedReceivedFileKeysSessionID: String?
     private var startupAnnouncementTask: Task<Void, Never>?
+    private var progressSequenceNumber: Int64 = 0
 
     init(
         components: LiveRuntimeComponents,
@@ -40,6 +42,7 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
     }
 
     func start() async throws {
+        let runtimeStartUptimeNanoseconds = DispatchTime.now().uptimeNanoseconds
         logger.emit(
             level: .info,
             event: "app.runtime.start.requested",
@@ -50,22 +53,41 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
         try await components.node.start()
         logger.emit(level: .debug, event: "app.runtime.start.succeeded", scope: "LocalSendRuntimeAdapter", context: runtimeContext(), attributes: [.string("event.action", "node_started")])
         bindNodeObservers()
+        let startupNode = components.node
+        let startupLogger = logger
         let startupContext = runtimeContext()
+        let startupAnnouncementStartUptimeNanoseconds = DispatchTime.now().uptimeNanoseconds
         startupAnnouncementTask?.cancel()
-        startupAnnouncementTask = Task { [weak self] in
-            guard let self else { return }
+        startupAnnouncementTask = Task.detached(priority: .utility) {
             do {
-                try await self.components.node.announce()
+                try await startupNode.announce()
+                startupLogger.emit(
+                    level: .info,
+                    event: "discovery.announce.succeeded",
+                    scope: "LocalSendRuntimeAdapter",
+                    context: startupContext,
+                    attributes: [
+                        .string("event.action", "startup"),
+                        .double(
+                            "startup.announce_elapsed_ms",
+                            Self.elapsedMilliseconds(since: startupAnnouncementStartUptimeNanoseconds)
+                        )
+                    ]
+                )
             } catch is CancellationError {
                 return
             } catch {
-                self.logger.emit(
+                startupLogger.emit(
                     level: .warning,
                     event: "discovery.announce.failed",
                     scope: "LocalSendRuntimeAdapter",
                     context: startupContext,
                     attributes: [
                         .string("event.action", "startup"),
+                        .double(
+                            "startup.announce_elapsed_ms",
+                            Self.elapsedMilliseconds(since: startupAnnouncementStartUptimeNanoseconds)
+                        ),
                         .string("error.message", error.localizedDescription),
                         .string("error.type", String(describing: type(of: error)))
                     ]
@@ -77,7 +99,13 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
             event: "app.runtime.start.succeeded",
             scope: "LocalSendRuntimeAdapter",
             context: runtimeContext(),
-            attributes: [.string("result", "success")]
+            attributes: [
+                .string("result", "success"),
+                .double(
+                    "startup.runtime_start_elapsed_ms",
+                    Self.elapsedMilliseconds(since: runtimeStartUptimeNanoseconds)
+                )
+            ]
         )
     }
 
@@ -214,23 +242,29 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
         do {
             prepareResponse = try await client.prepareUpload(request, pin: pin)
         } catch {
-            await emitSendTerminalProgress(
-                sessionID: nil,
-                peer: peer,
-                fileName: stagedItems.first?.name ?? peer.name,
-                fileURL: stagedItems.first?.fileURL,
-                byteCount: stagedItems.first?.byteCount,
-                totalBytes: stagedItems.compactMap(\.byteCount).reduce(0, +),
-                transferredBytes: 0,
-                fileProgress: Self.makeFailedSendFileProgressRows(
-                    stagedItems: stagedItems,
-                    failedFileID: stagedItems.first?.id
-                ),
-                totalItemCount: max(stagedItems.count, 1),
-                currentItemIndex: 1,
-                currentFileTransferredBytes: 0,
-                currentFileTotalBytes: stagedItems.first?.byteCount,
-                status: .failed
+            await emitRawProgressEvent(
+                kind: .transferFailed,
+                transferID: UUID().uuidString,
+                attemptID: UUID().uuidString,
+                direction: .sending,
+                counterpartName: peer.name,
+                counterpartKind: peer.kind,
+                files: stagedItems.enumerated().map { index, item in
+                    TransferProgressRawFile(
+                        fileID: item.id,
+                        displayName: item.name,
+                        fileURL: item.fileURL,
+                        order: index,
+                        attemptIndex: 0,
+                        state: item.id == stagedItems.first?.id ? .failed : .queued,
+                        declaredTotalBytes: item.byteCount,
+                        actualTransferredBytes: 0,
+                        errorSummary: error.localizedDescription
+                    )
+                },
+                totalBytesKnown: stagedItems.compactMap(\.byteCount).reduce(0, +),
+                actualTransferredBytes: 0,
+                cache: false
             )
             logger.emit(
                 level: .error,
@@ -276,9 +310,29 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
         let acceptedItems = stagedItems
             .filter { prepareResponse.files[$0.id] != nil }
             .map { SendBatchItem(item: $0, byteCount: resolvedByteCount(for: $0)) }
-        let totalItemCount = max(acceptedItems.count, 1)
-        let totalBatchBytes = max(acceptedItems.reduce(Int64.zero) { $0 + $1.byteCount }, 1)
+        let totalBatchBytes = acceptedItems.reduce(Int64.zero) { $0 + $1.byteCount }
         var bytesTransferredBeforeCurrentFile: Int64 = 0
+        activeSendSession?.acceptedItems = acceptedItems
+        activeSendSession?.currentItemIndex = 0
+        activeSendSession?.bytesTransferredBeforeCurrentFile = 0
+
+        await emitRawProgressEvent(
+            kind: .transferStarted,
+            transferID: prepareResponse.sessionId,
+            attemptID: prepareResponse.sessionId,
+            direction: .sending,
+            counterpartName: peer.name,
+            counterpartKind: peer.kind,
+            files: Self.makeSendRawFiles(
+                batchItems: acceptedItems,
+                currentItemIndex: nil,
+                currentFileTransferredBytes: 0,
+                currentFileTotalBytes: nil,
+                currentStatus: nil
+            ),
+            totalBytesKnown: totalBatchBytes > 0 ? totalBatchBytes : nil,
+            actualTransferredBytes: 0
+        )
 
         for (index, acceptedItem) in acceptedItems.enumerated() {
             let item = acceptedItem.item
@@ -288,28 +342,25 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
             guard let token = prepareResponse.files[item.id] else {
                 continue
             }
+            activeSendSession?.currentItemIndex = currentItemIndex
+            activeSendSession?.bytesTransferredBeforeCurrentFile = transferredBeforeCurrentFile
 
-            await emitSendProgress(
-                sessionID: prepareResponse.sessionId,
-                peer: peer,
-                fileName: item.name,
-                fileURL: item.fileURL,
-                byteCount: byteCount,
-                totalBytes: totalBatchBytes,
-                transferredBytes: bytesTransferredBeforeCurrentFile,
-                fileProgress: Self.makeSendFileProgressRows(
+            await emitRawProgressEvent(
+                kind: .snapshot,
+                transferID: prepareResponse.sessionId,
+                attemptID: prepareResponse.sessionId,
+                direction: .sending,
+                counterpartName: peer.name,
+                counterpartKind: peer.kind,
+                files: Self.makeSendRawFiles(
                     batchItems: acceptedItems,
                     currentItemIndex: currentItemIndex,
                     currentFileTransferredBytes: 0,
                     currentFileTotalBytes: byteCount,
-                    currentStatus: .running
+                    currentStatus: .transferring
                 ),
-                totalItemCount: totalItemCount,
-                currentItemIndex: currentItemIndex,
-                currentFileTransferredBytes: 0,
-                currentFileTotalBytes: byteCount,
-                throughput: FeatureTransferLocalization.string(forKey: "transfer.status.preparing"),
-                etaDescription: FeatureTransferLocalization.format("transfer.status.itemsRemaining", acceptedItems.count - index)
+                totalBytesKnown: totalBatchBytes > 0 ? totalBatchBytes : nil,
+                actualTransferredBytes: bytesTransferredBeforeCurrentFile
             )
 
             logger.emit(
@@ -332,52 +383,45 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
                     token: token,
                     progress: { [weak self] progress in
                         Task {
-                            await self?.emitSendProgress(
-                                sessionID: prepareResponse.sessionId,
-                                peer: peer,
-                                fileName: item.name,
-                                fileURL: item.fileURL,
-                                byteCount: byteCount,
-                                totalBytes: totalBatchBytes,
-                                transferredBytes: min(totalBatchBytes, transferredBeforeCurrentFile + progress.bytesTransferred),
-                                fileProgress: Self.makeSendFileProgressRows(
+                            await self?.emitRawProgressEvent(
+                                kind: .snapshot,
+                                transferID: prepareResponse.sessionId,
+                                attemptID: prepareResponse.sessionId,
+                                direction: .sending,
+                                counterpartName: peer.name,
+                                counterpartKind: peer.kind,
+                                files: Self.makeSendRawFiles(
                                     batchItems: acceptedItems,
                                     currentItemIndex: currentItemIndex,
                                     currentFileTransferredBytes: progress.bytesTransferred,
                                     currentFileTotalBytes: progress.totalBytes,
-                                    currentStatus: .running
+                                    currentStatus: .transferring
                                 ),
-                                totalItemCount: totalItemCount,
-                                currentItemIndex: currentItemIndex,
-                                currentFileTransferredBytes: progress.bytesTransferred,
-                                currentFileTotalBytes: progress.totalBytes,
-                                throughput: ByteCountFormatter.string(fromByteCount: progress.bytesTransferred, countStyle: .file),
-                                etaDescription: FeatureTransferLocalization.format("transfer.status.itemsRemaining", acceptedItems.count - index)
+                                totalBytesKnown: totalBatchBytes > 0 ? totalBatchBytes : nil,
+                                actualTransferredBytes: min(totalBatchBytes, transferredBeforeCurrentFile + progress.bytesTransferred)
                             )
                         }
                     }
                 )
             } catch {
-                await emitSendTerminalProgress(
-                    sessionID: prepareResponse.sessionId,
-                    peer: peer,
-                    fileName: item.name,
-                    fileURL: item.fileURL,
-                    byteCount: byteCount,
-                    totalBytes: totalBatchBytes,
-                    transferredBytes: bytesTransferredBeforeCurrentFile,
-                    fileProgress: Self.makeSendFileProgressRows(
+                await emitRawProgressEvent(
+                    kind: .transferFailed,
+                    transferID: prepareResponse.sessionId,
+                    attemptID: prepareResponse.sessionId,
+                    direction: .sending,
+                    counterpartName: peer.name,
+                    counterpartKind: peer.kind,
+                    files: Self.makeSendRawFiles(
                         batchItems: acceptedItems,
                         currentItemIndex: currentItemIndex,
                         currentFileTransferredBytes: 0,
                         currentFileTotalBytes: byteCount,
-                        currentStatus: .failed
+                        currentStatus: .failed,
+                        errorSummary: error.localizedDescription
                     ),
-                    totalItemCount: totalItemCount,
-                    currentItemIndex: currentItemIndex,
-                    currentFileTransferredBytes: 0,
-                    currentFileTotalBytes: byteCount,
-                    status: .failed
+                    totalBytesKnown: totalBatchBytes > 0 ? totalBatchBytes : nil,
+                    actualTransferredBytes: bytesTransferredBeforeCurrentFile,
+                    cache: false
                 )
                 activeSendSession = nil
                 logger.emit(
@@ -408,50 +452,43 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
             )
 
             bytesTransferredBeforeCurrentFile += byteCount
+            activeSendSession?.bytesTransferredBeforeCurrentFile = bytesTransferredBeforeCurrentFile
             if index + 1 == acceptedItems.count {
-                await emitSendTerminalProgress(
-                    sessionID: prepareResponse.sessionId,
-                    peer: peer,
-                    fileName: item.name,
-                    fileURL: item.fileURL,
-                    byteCount: byteCount,
-                    totalBytes: totalBatchBytes,
-                    transferredBytes: bytesTransferredBeforeCurrentFile,
-                    fileProgress: Self.makeSendFileProgressRows(
+                await emitRawProgressEvent(
+                    kind: .transferCompleted,
+                    transferID: prepareResponse.sessionId,
+                    attemptID: prepareResponse.sessionId,
+                    direction: .sending,
+                    counterpartName: peer.name,
+                    counterpartKind: peer.kind,
+                    files: Self.makeSendRawFiles(
                         batchItems: acceptedItems,
                         currentItemIndex: currentItemIndex,
                         currentFileTransferredBytes: byteCount,
                         currentFileTotalBytes: byteCount,
                         currentStatus: .completed
                     ),
-                    totalItemCount: totalItemCount,
-                    currentItemIndex: currentItemIndex,
-                    currentFileTransferredBytes: byteCount,
-                    currentFileTotalBytes: byteCount,
-                    status: .completed
+                    totalBytesKnown: totalBatchBytes > 0 ? totalBatchBytes : nil,
+                    actualTransferredBytes: bytesTransferredBeforeCurrentFile,
+                    cache: false
                 )
             } else {
-                await emitSendProgress(
-                    sessionID: prepareResponse.sessionId,
-                    peer: peer,
-                    fileName: item.name,
-                    fileURL: item.fileURL,
-                    byteCount: byteCount,
-                    totalBytes: totalBatchBytes,
-                    transferredBytes: bytesTransferredBeforeCurrentFile,
-                    fileProgress: Self.makeSendFileProgressRows(
+                await emitRawProgressEvent(
+                    kind: .snapshot,
+                    transferID: prepareResponse.sessionId,
+                    attemptID: prepareResponse.sessionId,
+                    direction: .sending,
+                    counterpartName: peer.name,
+                    counterpartKind: peer.kind,
+                    files: Self.makeSendRawFiles(
                         batchItems: acceptedItems,
                         currentItemIndex: currentItemIndex,
                         currentFileTransferredBytes: byteCount,
                         currentFileTotalBytes: byteCount,
                         currentStatus: .completed
                     ),
-                    totalItemCount: totalItemCount,
-                    currentItemIndex: currentItemIndex,
-                    currentFileTransferredBytes: byteCount,
-                    currentFileTotalBytes: byteCount,
-                    throughput: byteCount > 0 ? ByteCountFormatter.string(fromByteCount: byteCount, countStyle: .file) : FeatureTransferLocalization.string(forKey: "transfer.status.uploaded"),
-                    etaDescription: FeatureTransferLocalization.format("transfer.status.itemsRemaining", acceptedItems.count - index - 1)
+                    totalBytesKnown: totalBatchBytes > 0 ? totalBatchBytes : nil,
+                    actualTransferredBytes: bytesTransferredBeforeCurrentFile
                 )
             }
         }
@@ -492,23 +529,23 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
             let session = activeSendSession
             try await activeSendSession.client.cancel(sessionId: activeSendSession.id)
             self.activeSendSession = nil
-            await emitSendTerminalProgress(
-                sessionID: session.id,
-                peer: session.peer,
-                fileName: stagedItems.first?.name ?? session.peer.name,
-                fileURL: stagedItems.first?.fileURL,
-                byteCount: stagedItems.first?.byteCount,
-                totalBytes: stagedItems.compactMap(\.byteCount).reduce(0, +),
-                transferredBytes: 0,
-                fileProgress: Self.makeCanceledSendFileProgressRows(
-                    stagedItems: stagedItems,
-                    canceledFileID: stagedItems.first?.id
+            await emitRawProgressEvent(
+                kind: .transferCanceled,
+                transferID: session.id,
+                attemptID: session.id,
+                direction: .sending,
+                counterpartName: session.peer.name,
+                counterpartKind: session.peer.kind,
+                files: Self.makeSendRawFiles(
+                    batchItems: session.acceptedItems,
+                    currentItemIndex: session.currentItemIndex > 0 ? session.currentItemIndex : nil,
+                    currentFileTransferredBytes: 0,
+                    currentFileTotalBytes: session.currentItemIndex > 0 ? session.acceptedItems[session.currentItemIndex - 1].byteCount : nil,
+                    currentStatus: .canceled
                 ),
-                totalItemCount: max(stagedItems.count, 1),
-                currentItemIndex: 1,
-                currentFileTransferredBytes: 0,
-                currentFileTotalBytes: stagedItems.first?.byteCount,
-                status: .canceled
+                totalBytesKnown: session.acceptedItems.reduce(0) { $0 + $1.byteCount },
+                actualTransferredBytes: session.bytesTransferredBeforeCurrentFile,
+                cache: false
             )
             logger.emit(
                 level: .notice,
@@ -704,196 +741,80 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
                 attributes: [.string("transfer.file_name", leadRecord.file.fileName)]
             )
         }
+        let files = receiveSession.files.values
+            .sorted { $0.file.fileName < $1.file.fileName }
+            .enumerated()
+            .map { index, record in
+                let isCurrent = receiveSession.currentFileID == record.file.id
+                let fileState: TransferFileProgress.Status
+                switch receiveSession.status {
+                case .waiting:
+                    fileState = isCurrent ? .queued : .queued
+                case .transferring:
+                    if FileManager.default.fileExists(atPath: record.destinationURL.path) {
+                        fileState = .completed
+                    } else if isCurrent {
+                        fileState = .transferring
+                    } else {
+                        fileState = .queued
+                    }
+                case .finished:
+                    fileState = .completed
+                case .canceled:
+                    fileState = isCurrent ? .canceled : (FileManager.default.fileExists(atPath: record.destinationURL.path) ? .completed : .queued)
+                case .failed:
+                    fileState = isCurrent ? .failed : (FileManager.default.fileExists(atPath: record.destinationURL.path) ? .completed : .queued)
+                }
 
-        let status = receiveProgressStatus(for: receiveSession.status)
-        let progress = receiveProgressValue(for: receiveSession)
-        let totalBytes = max(receiveSession.totalBytes, 0)
-        let transferredBytes = max(receiveSession.bytesReceived, 0)
-        let currentFileTransferredBytes = receiveSession.currentFileBytesReceived
-        let currentFileTotalBytes = receiveSession.currentFileTotalBytes ?? leadRecord.file.size
-        let snapshot = ActiveTransferProgress(
-            id: receiveSession.sessionId,
+                let transferredBytes: Int64
+                if fileState == .completed {
+                    transferredBytes = record.file.size
+                } else if isCurrent {
+                    transferredBytes = receiveSession.currentFileBytesReceived
+                } else {
+                    transferredBytes = 0
+                }
+
+                return TransferProgressRawFile(
+                    fileID: record.file.id,
+                    displayName: record.file.fileName,
+                    fileURL: record.destinationURL,
+                    order: index,
+                    attemptIndex: 0,
+                    state: fileState,
+                    declaredTotalBytes: record.file.size > 0 ? record.file.size : nil,
+                    actualTransferredBytes: transferredBytes,
+                    errorSummary: receiveSession.status == .failed && isCurrent ? "Transfer failed" : nil
+                )
+            }
+
+        let kind: TransferProgressRawEvent.Kind
+        switch receiveSession.status {
+        case .waiting, .transferring:
+            kind = .snapshot
+        case .finished:
+            kind = .transferCompleted
+        case .canceled:
+            kind = .transferCanceled
+        case .failed:
+            kind = .transferFailed
+        }
+
+        await emitRawProgressEvent(
+            kind: kind,
+            transferID: receiveSession.sessionId,
+            attemptID: receiveSession.sessionId,
             direction: .receiving,
             counterpartName: receiveSession.senderInfo.alias,
             counterpartKind: DeviceKind(deviceType: receiveSession.senderInfo.deviceType),
-            fileName: leadRecord.file.fileName,
-            progress: progress,
-            throughput: receiveThroughputText(for: receiveSession),
-            etaDescription: receiveEtaText(for: receiveSession.status),
-            byteCount: leadRecord.file.size,
-            fileURL: leadRecord.destinationURL,
-            totalBytes: totalBytes > 0 ? totalBytes : nil,
-            transferredBytes: transferredBytes > 0 ? transferredBytes : nil,
-            fileProgress: [
-                TransferFileProgress(
-                    id: leadRecord.file.id,
-                    fileName: leadRecord.file.fileName,
-                    totalBytes: currentFileTotalBytes > 0 ? currentFileTotalBytes : nil,
-                    transferredBytes: currentFileTransferredBytes > 0 ? currentFileTransferredBytes : nil,
-                    status: Self.receiveFileProgressStatus(for: status)
-                )
-            ],
-            totalItemCount: 1,
-            currentItemIndex: 1,
-            currentFileTotalBytes: currentFileTotalBytes > 0 ? currentFileTotalBytes : nil,
-            currentFileTransferredBytes: currentFileTransferredBytes > 0 ? currentFileTransferredBytes : nil,
-            status: status
+            files: files,
+            totalBytesKnown: receiveSession.totalBytes > 0 ? receiveSession.totalBytes : nil,
+            actualTransferredBytes: max(receiveSession.bytesReceived, 0),
+            cache: receiveSession.status == .waiting || receiveSession.status == .transferring
         )
-
-        switch receiveSession.status {
-        case .waiting, .transferring:
-            await progressBroadcaster.yield(.updated(snapshot))
-        case .finished:
-            if emittedReceivedFileKeysSessionID != receiveSession.sessionId {
-                emittedReceivedFileKeys.removeAll()
-                emittedReceivedFileKeysSessionID = receiveSession.sessionId
-            }
-            let sortedRecords = receiveSession.files.values.sorted { $0.file.fileName < $1.file.fileName }
-            for record in sortedRecords {
-                let key = "\(receiveSession.sessionId):\(record.file.id)"
-                guard emittedReceivedFileKeys.contains(key) == false else { continue }
-                emittedReceivedFileKeys.insert(key)
-                let completedSnapshot = ActiveTransferProgress(
-                    id: receiveSession.sessionId,
-                    direction: .receiving,
-                    counterpartName: receiveSession.senderInfo.alias,
-                    counterpartKind: DeviceKind(deviceType: receiveSession.senderInfo.deviceType),
-                    fileName: record.file.fileName,
-                    progress: 1,
-                    throughput: FeatureTransferLocalization.string(forKey: "transfer.status.saved"),
-                    etaDescription: receiveEtaText(for: receiveSession.status),
-                    byteCount: record.file.size,
-                    fileURL: record.destinationURL,
-                    totalBytes: totalBytes > 0 ? totalBytes : nil,
-                    transferredBytes: totalBytes > 0 ? totalBytes : nil,
-                    fileProgress: [
-                        TransferFileProgress(
-                            id: record.file.id,
-                            fileName: record.file.fileName,
-                            totalBytes: record.file.size,
-                            transferredBytes: record.file.size,
-                            status: .completed
-                        )
-                    ],
-                    totalItemCount: 1,
-                    currentItemIndex: 1,
-                    currentFileTotalBytes: record.file.size,
-                    currentFileTransferredBytes: record.file.size,
-                    status: .completed
-                )
-                await progressBroadcaster.yield(.terminal(completedSnapshot), cache: false)
-            }
-            await progressBroadcaster.clearCurrentValue()
-        case .canceled, .failed:
-            await progressBroadcaster.yield(.terminal(snapshot), cache: false)
+        if kind != .snapshot {
             await progressBroadcaster.clearCurrentValue()
         }
-    }
-
-    private func emitSendProgress(
-        sessionID: String,
-        peer: NearbyPeerItem,
-        fileName: String,
-        fileURL: URL?,
-        byteCount: Int64?,
-        totalBytes: Int64,
-        transferredBytes: Int64,
-        fileProgress: [TransferFileProgress],
-        totalItemCount: Int,
-        currentItemIndex: Int,
-        currentFileTransferredBytes: Int64,
-        currentFileTotalBytes: Int64?,
-        throughput: String,
-        etaDescription: String
-    ) async {
-        let clampedTotalBytes = max(totalBytes, 1)
-        let clampedTransferredBytes = min(max(transferredBytes, 0), clampedTotalBytes)
-        await progressBroadcaster.yield(
-            .updated(
-                ActiveTransferProgress(
-                    id: sessionID,
-                    direction: .sending,
-                    counterpartName: peer.name,
-                    counterpartKind: peer.kind,
-                    fileName: fileName,
-                    progress: Double(clampedTransferredBytes) / Double(clampedTotalBytes),
-                    throughput: throughput,
-                    etaDescription: etaDescription,
-                    byteCount: byteCount,
-                    fileURL: fileURL,
-                    totalBytes: clampedTotalBytes,
-                    transferredBytes: clampedTransferredBytes,
-                    fileProgress: fileProgress,
-                    totalItemCount: totalItemCount,
-                    currentItemIndex: currentItemIndex,
-                    currentFileTotalBytes: currentFileTotalBytes,
-                    currentFileTransferredBytes: currentFileTransferredBytes,
-                    status: .running
-                )
-            )
-        )
-    }
-
-    private func emitSendTerminalProgress(
-        sessionID: String?,
-        peer: NearbyPeerItem,
-        fileName: String,
-        fileURL: URL?,
-        byteCount: Int64?,
-        totalBytes: Int64,
-        transferredBytes: Int64,
-        fileProgress: [TransferFileProgress],
-        totalItemCount: Int,
-        currentItemIndex: Int,
-        currentFileTransferredBytes: Int64,
-        currentFileTotalBytes: Int64?,
-        status: ActiveTransferProgress.Status
-    ) async {
-        let resolvedSessionID = sessionID ?? UUID().uuidString
-        let clampedTotalBytes = max(totalBytes, 1)
-        let clampedTransferredBytes = min(max(transferredBytes, 0), clampedTotalBytes)
-        let etaKey: String
-        let throughput: String
-        switch status {
-        case .completed:
-            etaKey = "transfer.status.complete"
-            throughput = FeatureTransferLocalization.string(forKey: "transfer.status.saved")
-        case .failed:
-            etaKey = ""
-            throughput = "Transfer failed"
-        case .canceled:
-            etaKey = "transfer.status.canceled"
-            throughput = FeatureTransferLocalization.string(forKey: "transfer.status.canceled")
-        case .running:
-            etaKey = "transfer.status.receiving"
-            throughput = FeatureTransferLocalization.string(forKey: "transfer.status.receivingProgress")
-        }
-        await progressBroadcaster.yield(
-            .terminal(
-                ActiveTransferProgress(
-                    id: resolvedSessionID,
-                    direction: .sending,
-                    counterpartName: peer.name,
-                    counterpartKind: peer.kind,
-                    fileName: fileName,
-                    progress: status == .completed ? 1 : Double(clampedTransferredBytes) / Double(clampedTotalBytes),
-                    throughput: throughput,
-                    etaDescription: etaKey.isEmpty ? "Transfer failed" : FeatureTransferLocalization.string(forKey: etaKey),
-                    byteCount: byteCount,
-                    fileURL: fileURL,
-                    totalBytes: clampedTotalBytes,
-                    transferredBytes: clampedTransferredBytes,
-                    fileProgress: fileProgress,
-                    totalItemCount: totalItemCount,
-                    currentItemIndex: currentItemIndex,
-                    currentFileTotalBytes: currentFileTotalBytes,
-                    currentFileTransferredBytes: currentFileTransferredBytes,
-                    status: status
-                )
-            ),
-            cache: false
-        )
-        await progressBroadcaster.clearCurrentValue()
     }
 
     private func currentReceiveRecord(in receiveSession: ReceiveSessionSnapshot) -> ReceivedFileRecord? {
@@ -906,136 +827,41 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
             .first { FileManager.default.fileExists(atPath: $0.destinationURL.path) == false }
     }
 
-    private static func makeSendFileProgressRows(
+    private static func makeSendRawFiles(
         batchItems: [SendBatchItem],
-        currentItemIndex: Int,
+        currentItemIndex: Int?,
         currentFileTransferredBytes: Int64,
         currentFileTotalBytes: Int64?,
-        currentStatus: TransferFileProgress.Status
-    ) -> [TransferFileProgress] {
+        currentStatus: TransferFileProgress.Status?,
+        errorSummary: String? = nil
+    ) -> [TransferProgressRawFile] {
         batchItems.enumerated().map { index, batchItem in
             let itemIndex = index + 1
             let status: TransferFileProgress.Status
-            let transferredBytes: Int64?
+            let transferredBytes: Int64
 
-            if itemIndex < currentItemIndex {
+            if let currentItemIndex, itemIndex < currentItemIndex {
                 status = .completed
                 transferredBytes = batchItem.byteCount
-            } else if itemIndex == currentItemIndex {
-                status = currentStatus
-                transferredBytes = currentStatus == .pending ? 0 : currentFileTransferredBytes
+            } else if let currentItemIndex, itemIndex == currentItemIndex {
+                status = currentStatus ?? .queued
+                transferredBytes = status == .queued ? 0 : currentFileTransferredBytes
             } else {
-                status = .pending
+                status = .queued
                 transferredBytes = 0
             }
 
-            let resolvedTotalBytes: Int64?
-            if currentItemIndex == itemIndex,
-               let currentFileTotalBytes,
-               currentFileTotalBytes > 0 {
-                resolvedTotalBytes = currentFileTotalBytes
-            } else {
-                resolvedTotalBytes = batchItem.byteCount
-            }
-
-            return TransferFileProgress(
-                id: batchItem.item.id,
-                fileName: batchItem.item.name,
-                totalBytes: resolvedTotalBytes,
-                transferredBytes: transferredBytes,
-                status: status
+            return TransferProgressRawFile(
+                fileID: batchItem.item.id,
+                displayName: batchItem.item.name,
+                fileURL: batchItem.item.fileURL,
+                order: index,
+                attemptIndex: 0,
+                state: status,
+                declaredTotalBytes: (currentItemIndex == itemIndex ? currentFileTotalBytes : batchItem.byteCount) ?? batchItem.byteCount,
+                actualTransferredBytes: transferredBytes,
+                errorSummary: status == .failed ? errorSummary : nil
             )
-        }
-    }
-
-    private static func makeFailedSendFileProgressRows(
-        stagedItems: [StagedTransferItem],
-        failedFileID: String?
-    ) -> [TransferFileProgress] {
-        stagedItems.map { item in
-            TransferFileProgress(
-                id: item.id,
-                fileName: item.name,
-                totalBytes: item.byteCount,
-                transferredBytes: 0,
-                status: item.id == failedFileID ? .failed : .pending
-            )
-        }
-    }
-
-    private static func makeCanceledSendFileProgressRows(
-        stagedItems: [StagedTransferItem],
-        canceledFileID: String?
-    ) -> [TransferFileProgress] {
-        stagedItems.map { item in
-            TransferFileProgress(
-                id: item.id,
-                fileName: item.name,
-                totalBytes: item.byteCount,
-                transferredBytes: 0,
-                status: item.id == canceledFileID ? .canceled : .pending
-            )
-        }
-    }
-
-    private func receiveProgressValue(for receiveSession: ReceiveSessionSnapshot) -> Double {
-        switch receiveSession.status {
-        case .waiting:
-            return receiveSession.totalBytes > 0 ? 0 : 0.05
-        case .transferring, .finished:
-            guard receiveSession.totalBytes > 0 else { return receiveSession.status == .finished ? 1 : 0 }
-            return min(1, Double(receiveSession.bytesReceived) / Double(receiveSession.totalBytes))
-        case .canceled, .failed:
-            guard receiveSession.totalBytes > 0 else { return 0 }
-            return min(1, Double(receiveSession.bytesReceived) / Double(receiveSession.totalBytes))
-        }
-    }
-
-    private func receiveProgressStatus(for status: ReceiveSessionStatus) -> ActiveTransferProgress.Status {
-        switch status {
-        case .waiting, .transferring:
-            return .running
-        case .finished:
-            return .completed
-        case .canceled:
-            return .canceled
-        case .failed:
-            return .failed
-        }
-    }
-
-    private static func receiveFileProgressStatus(for status: ActiveTransferProgress.Status) -> TransferFileProgress.Status {
-        switch status {
-        case .running:
-            return .running
-        case .completed:
-            return .completed
-        case .failed:
-            return .failed
-        case .canceled:
-            return .canceled
-        }
-    }
-
-    private func receiveThroughputText(for receiveSession: ReceiveSessionSnapshot) -> String {
-        if receiveSession.bytesReceived > 0 {
-            return ByteCountFormatter.string(fromByteCount: receiveSession.bytesReceived, countStyle: .file)
-        }
-        return FeatureTransferLocalization.string(forKey: "transfer.status.receivingProgress")
-    }
-
-    private func receiveEtaText(for status: ReceiveSessionStatus) -> String {
-        switch status {
-        case .waiting:
-            return FeatureTransferLocalization.string(forKey: "transfer.status.waitingForSender")
-        case .transferring:
-            return FeatureTransferLocalization.string(forKey: "transfer.status.receiving")
-        case .finished:
-            return FeatureTransferLocalization.string(forKey: "transfer.status.complete")
-        case .canceled:
-            return FeatureTransferLocalization.string(forKey: "transfer.status.canceled")
-        case .failed:
-            return "Transfer failed"
         }
     }
 
@@ -1043,8 +869,45 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
         item.byteCount ?? Int64((try? Data(contentsOf: item.fileURL).count) ?? 0)
     }
 
+    private func emitRawProgressEvent(
+        kind: TransferProgressRawEvent.Kind,
+        transferID: String,
+        attemptID: String,
+        direction: ActiveTransferProgress.Direction,
+        counterpartName: String,
+        counterpartKind: DeviceKind,
+        files: [TransferProgressRawFile],
+        totalBytesKnown: Int64?,
+        actualTransferredBytes: Int64,
+        cache: Bool = true
+    ) async {
+        progressSequenceNumber += 1
+        await progressBroadcaster.yield(
+            .event(
+                TransferProgressRawEvent(
+                    kind: kind,
+                    transferID: transferID,
+                    attemptID: attemptID,
+                    direction: direction,
+                    counterpartName: counterpartName,
+                    counterpartKind: counterpartKind,
+                    sequenceNumber: progressSequenceNumber,
+                    eventMonotonicTime: ProcessInfo.processInfo.systemUptime,
+                    files: files,
+                    totalBytesKnown: totalBytesKnown,
+                    actualTransferredBytes: actualTransferredBytes
+                )
+            ),
+            cache: cache
+        )
+    }
+
     private static func makeTraceID() -> String {
         UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+    }
+
+    private nonisolated static func elapsedMilliseconds(since startUptimeNanoseconds: UInt64) -> Double {
+        Double(DispatchTime.now().uptimeNanoseconds - startUptimeNanoseconds) / 1_000_000
     }
 }
 
@@ -1053,6 +916,9 @@ private struct ActiveSendSession {
     let peer: NearbyPeerItem
     let client: LocalSendClient
     let traceID: String
+    var acceptedItems: [SendBatchItem] = []
+    var currentItemIndex: Int = 0
+    var bytesTransferredBeforeCurrentFile: Int64 = 0
 }
 
 private struct SendBatchItem {

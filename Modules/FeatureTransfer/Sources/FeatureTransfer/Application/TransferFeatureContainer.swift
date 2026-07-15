@@ -212,6 +212,7 @@ public final class TransferFeatureContainer {
             historyPersistence: InMemoryHistoryPersistence(entries: []),
             loginItemManaging: NoopLoginItemManager(),
             snapshot: snapshot,
+            progressThrottleIntervalNanoseconds: 100_000_000,
             logger: .disabled()
         )
         return TransferFeatureContainer(store: store, logger: .disabled())
@@ -233,6 +234,7 @@ public final class TransferFeatureContainer {
             historyPersistence: InMemoryHistoryPersistence(),
             loginItemManaging: NoopLoginItemManager(),
             snapshot: snapshot,
+            progressThrottleIntervalNanoseconds: 100_000_000,
             logger: .disabled()
         )
         store.runtimeStatusText = FeatureTransferLocalization.string(forKey: "runtime.discoverable")
@@ -247,6 +249,7 @@ public final class TransferFeatureContainer {
             historyPersistence: bootstrap.historyPersistence,
             loginItemManaging: bootstrap.loginItemManaging,
             snapshot: bootstrap.snapshot,
+            progressThrottleIntervalNanoseconds: 100_000_000,
             logger: bootstrap.logger
         )
 
@@ -274,6 +277,7 @@ public final class TransferFeatureContainer {
         userDefaults: UserDefaults,
         fileManager: FileManager
     ) -> LiveBootstrap {
+        let bootstrapStartUptimeNanoseconds = DispatchTime.now().uptimeNanoseconds
         let baseDirectory = applicationSupportDirectory(fileManager: fileManager)
         let logger = makeLogger(baseDirectory: baseDirectory)
         logger.emit(level: .info, event: "app.launch.started", scope: "TransferFeatureContainer")
@@ -304,7 +308,11 @@ public final class TransferFeatureContainer {
                 .string("app.component", "TransferFeatureContainer"),
                 .bool("settings.use_https", snapshot.protocolSettings.useHTTPS),
                 .bool("settings.allow_downloads", snapshot.protocolSettings.allowDownloads),
-                .string("settings.save_location.last_path_component", snapshot.protocolSettings.saveLocation.lastPathComponent)
+                .string("settings.save_location.last_path_component", snapshot.protocolSettings.saveLocation.lastPathComponent),
+                .double(
+                    "startup.bootstrap_elapsed_ms",
+                    elapsedMilliseconds(since: bootstrapStartUptimeNanoseconds)
+                )
             ]
         )
 
@@ -430,6 +438,10 @@ public final class TransferFeatureContainer {
 
     private nonisolated static func generatedTextFilename() -> String {
         "LocalDrop Text \(UUID().uuidString.lowercased()).txt"
+    }
+
+    private nonisolated static func elapsedMilliseconds(since startUptimeNanoseconds: UInt64) -> Double {
+        Double(DispatchTime.now().uptimeNanoseconds - startUptimeNanoseconds) / 1_000_000
     }
 
     private func recordTextStagingFailure(

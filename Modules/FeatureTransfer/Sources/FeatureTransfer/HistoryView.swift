@@ -11,13 +11,13 @@ struct HistoryView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("history.title")
-                    .font(Typography.headline)
+                Text(FeatureTransferLocalization.resource("history.title"))
+                    .appFont(.headline)
                     .foregroundStyle(.primary)
                 Spacer()
-                Button("history.clearAll") { showsClearConfirmation = true }
+                Button(FeatureTransferLocalization.resource("history.clearAll")) { showsClearConfirmation = true }
                     .buttonStyle(.plain)
-                    .font(Typography.callout.weight(.medium))
+                    .appFont(.text(.callout, .medium))
                     .foregroundStyle(store.historyEntries.isEmpty ? .secondary : SemanticColor.destructive)
                     .disabled(store.historyEntries.isEmpty)
             }
@@ -48,18 +48,18 @@ struct HistoryView: View {
         .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: store.historyEntries.isEmpty)
         .animation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.82), value: store.historyEntries.map(\.id))
         .confirmationDialog(
-            "history.clearConfirmTitle",
+            FeatureTransferLocalization.string(forKey: "history.clearConfirmTitle"),
             isPresented: $showsClearConfirmation,
             titleVisibility: .visible
         ) {
-            Button("history.clearAll", role: .destructive) {
+            Button(FeatureTransferLocalization.resource("history.clearAll"), role: .destructive) {
                 withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
                     store.clearHistory()
                 }
             }
-            Button("general.cancel", role: .cancel) {}
+            Button(FeatureTransferLocalization.resource("general.cancel"), role: .cancel) {}
         } message: {
-            Text("history.clearAllMessage")
+            Text(FeatureTransferLocalization.resource("history.clearAllMessage"))
         }
     }
 }
@@ -76,11 +76,11 @@ private struct HistoryEmptyState: View {
                     .foregroundStyle(SemanticColor.discovery)
             }
 
-                Text("history.noTransfers")
-                    .font(Typography.headline)
+                Text(FeatureTransferLocalization.resource("history.noTransfers"))
+                    .appFont(.headline)
                     .foregroundStyle(.primary)
-                Text("history.noTransfersHelp")
-                .font(Typography.callout)
+                Text(FeatureTransferLocalization.resource("history.noTransfersHelp"))
+                .appFont(.callout)
                 .foregroundStyle(.secondary)
         }
         .multilineTextAlignment(.center)

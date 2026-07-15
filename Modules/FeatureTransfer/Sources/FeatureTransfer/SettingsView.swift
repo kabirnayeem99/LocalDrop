@@ -22,34 +22,34 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            Section("settings.section.general") {
-                Picker("settings.appearance", selection: $store.appearance) {
+            Section(FeatureTransferLocalization.string(forKey: "settings.section.general")) {
+                Picker(FeatureTransferLocalization.string(forKey: "settings.appearance"), selection: $store.appearance) {
                     ForEach(AppearanceSetting.allCases) { Text($0.label).tag($0) }
                 }
                 .pickerStyle(.menu)
 
-                LabeledContent("settings.accentColor") {
+                LabeledContent(FeatureTransferLocalization.string(forKey: "settings.accentColor")) {
                     AccentSwatchRow(selection: $store.accentColor)
                 }
 
-                Picker("settings.language", selection: $store.language) {
+                Picker(FeatureTransferLocalization.string(forKey: "settings.language"), selection: $store.language) {
                     ForEach(LanguageSetting.allCases) { Text($0.label).tag($0) }
                 }
                 .pickerStyle(.menu)
 
-                Toggle("settings.minimizeToMenuBar", isOn: $store.minimizeToMenuBar)
-                Toggle("settings.launchAtLogin", isOn: $store.launchAtLogin)
-                Toggle("settings.reduceMotion", isOn: $store.reduceMotion)
+                Toggle(FeatureTransferLocalization.resource("settings.minimizeToMenuBar"), isOn: $store.minimizeToMenuBar)
+                Toggle(FeatureTransferLocalization.resource("settings.launchAtLogin"), isOn: $store.launchAtLogin)
+                Toggle(FeatureTransferLocalization.resource("settings.reduceMotion"), isOn: $store.reduceMotion)
             }
 
-            Section("settings.section.receiving") {
+            Section(FeatureTransferLocalization.string(forKey: "settings.section.receiving")) {
                 LabeledContent {
-                    Button("settings.chooseSaveLocation") { chooseSaveLocation() }
+                    Button(FeatureTransferLocalization.resource("settings.chooseSaveLocation")) { chooseSaveLocation() }
                 } label: {
                     VStack(alignment: .leading, spacing: Spacing.xxs) {
-                        Text("settings.saveLocation")
+                        Text(FeatureTransferLocalization.resource("settings.saveLocation"))
                         Text(store.saveLocation)
-                            .font(Typography.subheadline)
+                            .appFont(.subheadline)
                             .foregroundStyle(.secondary)
                             .padding(.vertical, saveLocationPulse ? 2 : 0)
                             .background(
@@ -60,27 +60,27 @@ struct SettingsView: View {
                     }
                 }
 
-                Toggle("settings.requirePIN", isOn: $store.requirePIN)
+                Toggle(FeatureTransferLocalization.resource("settings.requirePIN"), isOn: $store.requirePIN)
                     .accessibilityIdentifier("settings-require-pin-toggle")
-                    .help("settings.requirePINHelp")
-                LabeledContent("settings.incomingPIN") {
+                    .help(Text(FeatureTransferLocalization.resource("settings.requirePINHelp")))
+                LabeledContent(FeatureTransferLocalization.string(forKey: "settings.incomingPIN")) {
                     VStack(alignment: .trailing, spacing: Spacing.xxs) {
                         HStack(spacing: Spacing.xs) {
                             incomingPINField
 
-                            Button(showsIncomingPIN ? "settings.hide" : "settings.show") {
+                            Button(FeatureTransferLocalization.resource(showsIncomingPIN ? "settings.hide" : "settings.show")) {
                                 showsIncomingPIN.toggle()
                             }
                             .disabled(store.requirePIN == false)
                             .accessibilityIdentifier("settings-incoming-pin-visibility")
 
-                            Button("settings.apply") {
+                            Button(FeatureTransferLocalization.resource("settings.apply")) {
                                 applyIncomingPIN()
                             }
                             .disabled(canApplyIncomingPIN == false)
                             .accessibilityIdentifier("settings-incoming-pin-apply")
 
-                            Button("settings.regenerate") {
+                            Button(FeatureTransferLocalization.resource("settings.regenerate")) {
                                 store.regenerateIncomingPIN()
                                 pinDraft = store.incomingPIN
                                 pinValidationMessage = nil
@@ -89,27 +89,34 @@ struct SettingsView: View {
                             .accessibilityIdentifier("settings-incoming-pin-regenerate")
                         }
 
-                        Text(pinValidationMessage ?? String(localized: .init("settings.incomingPINHint"), bundle: .module))
-                            .font(Typography.caption1)
-                            .foregroundStyle(pinValidationMessage == nil ? .secondary : SemanticColor.pending)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        if let pinValidationMessage {
+                            Text(pinValidationMessage)
+                                .appFont(.caption1)
+                                .foregroundStyle(SemanticColor.pending)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        } else {
+                            Text(FeatureTransferLocalization.resource("settings.incomingPINHint"))
+                                .appFont(.caption1)
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
                     }
                 }
-                Toggle("settings.autoAcceptFavorites", isOn: $store.autoAcceptFavorites)
-                    .help("settings.autoAcceptFavoritesHelp")
+                Toggle(FeatureTransferLocalization.resource("settings.autoAcceptFavorites"), isOn: $store.autoAcceptFavorites)
+                    .help(Text(FeatureTransferLocalization.resource("settings.autoAcceptFavoritesHelp")))
             }
 
-            Section("settings.section.network") {
-                LabeledContent("settings.deviceName", value: store.deviceName)
-                LabeledContent("settings.port") {
+            Section(FeatureTransferLocalization.string(forKey: "settings.section.network")) {
+                LabeledContent(FeatureTransferLocalization.string(forKey: "settings.deviceName"), value: store.deviceName)
+                LabeledContent(FeatureTransferLocalization.string(forKey: "settings.port")) {
                     Text(store.port)
                         .foregroundStyle(.secondary)
                         .monospacedStat()
                 }
-                Toggle("settings.allowDownloads", isOn: $store.allowDownloads)
-                    .help("settings.allowDownloadsHelp")
-                Toggle("settings.useHTTPS", isOn: $store.useHTTPS)
-                    .help("settings.useHTTPSHelp")
+                Toggle(FeatureTransferLocalization.resource("settings.allowDownloads"), isOn: $store.allowDownloads)
+                    .help(Text(FeatureTransferLocalization.resource("settings.allowDownloadsHelp")))
+                Toggle(FeatureTransferLocalization.resource("settings.useHTTPS"), isOn: $store.useHTTPS)
+                    .help(Text(FeatureTransferLocalization.resource("settings.useHTTPSHelp")))
             }
         }
         .formStyle(.grouped)
@@ -119,9 +126,9 @@ struct SettingsView: View {
         }
         .alert(item: $securityDialog) { dialog in
             Alert(
-                title: Text("settings.securityChanged"),
+                title: Text(FeatureTransferLocalization.resource("settings.securityChanged")),
                 message: Text(dialog.message),
-                dismissButton: .default(Text("settings.ok"))
+                dismissButton: .default(Text(FeatureTransferLocalization.resource("settings.ok")))
             )
         }
         .onChange(of: store.appearance) { _, _ in store.persistSettings() }
@@ -161,7 +168,7 @@ struct SettingsView: View {
 
     @ViewBuilder private var incomingPINField: some View {
         if showsIncomingPIN {
-            TextField("settings.incomingPINPlaceholder", text: $pinDraft)
+            TextField(FeatureTransferLocalization.string(forKey: "settings.incomingPINPlaceholder"), text: $pinDraft)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 110)
                 .monospaced()
@@ -170,7 +177,7 @@ struct SettingsView: View {
                 .environment(\.layoutDirection, .leftToRight)
                 .onSubmit { applyIncomingPIN() }
         } else {
-            SecureField("settings.incomingPINPlaceholder", text: $pinDraft)
+            SecureField(FeatureTransferLocalization.string(forKey: "settings.incomingPINPlaceholder"), text: $pinDraft)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 110)
                 .monospaced()
@@ -214,8 +221,8 @@ struct SettingsView: View {
     private func applyIncomingPIN() {
         guard store.requirePIN else { return }
         guard let normalized = normalizedPinDraft else {
-            pinValidationMessage = String(
-                format: String(localized: .init("settings.incomingPINValidation"), bundle: .module),
+            pinValidationMessage = FeatureTransferLocalization.format(
+                "settings.incomingPINValidation",
                 TransferProtocolSettings.incomingPINLength
             )
             return
@@ -233,7 +240,7 @@ private struct AccentSwatchRow: View {
 
     var body: some View {
         HStack(spacing: Spacing.xs) {
-            ForEach(AccentColorChoice.allCases) { accent in
+            ForEach(AccentColorChoice.selectableCases) { accent in
                 Button {
                     selection = accent
                 } label: {
@@ -288,4 +295,3 @@ private enum SecurityDialog: Identifiable {
         }
     }
 }
-

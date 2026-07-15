@@ -20,7 +20,13 @@ struct RootView: View {
                 .navigationTitle(store.screen.title)
         }
         .environment(\.appReducesMotion, store.reduceMotion)
+        .environment(\.accentTheme, store.accentColor.theme)
         .applyingLanguageOverride(store.language)
+        .appFont(.body)
+        .onAppear { FeatureTransferLocalization.setLanguage(store.language) }
+        .onChange(of: store.language) { _, newValue in
+            FeatureTransferLocalization.setLanguage(newValue)
+        }
         .tint(store.accentColor.theme.primary)
         .preferredColorScheme(store.appearance.colorScheme)
         .overlay(alignment: .top) {
@@ -50,7 +56,7 @@ struct RootView: View {
 
     private var sidebar: some View {
         List(selection: $store.screen) {
-            Section("sidebar.section.transfer") {
+            Section(FeatureTransferLocalization.string(forKey: "sidebar.section.transfer")) {
                 ForEach(Screen.allCases) { screen in
                     SidebarRow(screen: screen, badgeCount: badgeCount(for: screen))
                         .tag(screen)
@@ -81,8 +87,8 @@ struct RootView: View {
                     BrandMark(variant: .monoLight)
                         .frame(width: 17, height: 17)
                 }
-            Text("root.localDrop")
-                .font(Typography.title3.weight(.bold))
+            Text(FeatureTransferLocalization.resource("root.localDrop"))
+                .appFont(.text(.title3, .bold))
                 .foregroundStyle(.primary)
             Spacer()
         }
@@ -116,13 +122,13 @@ struct RootView: View {
             Button {
                 store.screen = .history
             } label: {
-                Label("root.history", systemImage: "clock.arrow.circlepath")
+                Label(FeatureTransferLocalization.resource("root.history"), systemImage: "clock.arrow.circlepath")
             }
 
             Button {
                 store.screen = .settings
             } label: {
-                Label("root.settings", systemImage: "gearshape")
+                Label(FeatureTransferLocalization.resource("root.settings"), systemImage: "gearshape")
             }
         }
     }
@@ -172,14 +178,14 @@ private struct SidebarRow: View {
                 Text(screen.title)
                 Spacer(minLength: 0)
                 if badgeCount > 0 {
-                    Text("\(badgeCount)")
-                        .font(Typography.caption1.weight(.bold))
+                    Text(verbatim: "\(badgeCount)")
+                        .appFont(.text(.caption, .bold))
                         .foregroundStyle(.white)
                         .frame(minWidth: 16, minHeight: 16)
                         .background(badgeTint, in: Capsule())
                         .contentTransition(.numericText())
                         .transition(.scale(scale: 0.9).combined(with: .opacity))
-                        .accessibilityLabel(Text(String(format: String(localized: .init("root.activeItem"), bundle: .module), badgeCount)))
+                        .accessibilityLabel(Text(FeatureTransferLocalization.format("root.activeItem", badgeCount)))
                 }
             }
         } icon: {
@@ -211,7 +217,7 @@ private struct RefreshToolbarButton: View {
     var body: some View {
         Button(action: action) {
             Label {
-                Text("root.refresh")
+                Text(FeatureTransferLocalization.resource("root.refresh"))
             } icon: {
                 if isRefreshing, !reduceMotion {
                     TimelineView(.animation) { context in
@@ -223,7 +229,7 @@ private struct RefreshToolbarButton: View {
                 }
             }
         }
-        .help(isRefreshing ? "root.refreshingDiscovery" : "root.refresh")
+        .help(Text(FeatureTransferLocalization.resource(isRefreshing ? "root.refreshingDiscovery" : "root.refresh")))
         .disabled(isRefreshing)
     }
 }
@@ -269,13 +275,13 @@ private struct ThisDeviceChip: View {
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(deviceName)
-                    .font(Typography.callout.weight(.semibold))
+                    .appFont(.text(.callout, .semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                 HStack(spacing: Spacing.xxs + 1) {
                     RuntimeStatusDot(isAvailable: isAvailable, reduceMotion: reduceMotion)
                     Text(statusText)
-                        .font(Typography.subheadline)
+                        .appFont(.subheadline)
                         .foregroundStyle(isAvailable ? .secondary : SemanticColor.pending)
                 }
             }
@@ -289,7 +295,7 @@ private struct ThisDeviceChip: View {
             RoundedRectangle.continuous(Radius.lg)
                 .strokeBorder(borderTint, lineWidth: 0.5)
         }
-        .help(Text(String(format: String(localized: .init("thisDevice.statusHelp"), bundle: .module), statusText)))
+        .help(Text(FeatureTransferLocalization.format("thisDevice.statusHelp", statusText)))
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: isAvailable)
     }
 
@@ -318,7 +324,7 @@ private struct RuntimeStatusDot: View {
                 .fill(isAvailable ? SemanticColor.success : SemanticColor.pending)
                 .frame(width: 6, height: 6)
         }
-        .accessibilityLabel(isAvailable ? "thisDevice.runtimeAvailable" : "thisDevice.runtimeUnavailable")
+        .accessibilityLabel(Text(FeatureTransferLocalization.resource(isAvailable ? "thisDevice.runtimeAvailable" : "thisDevice.runtimeUnavailable")))
     }
 }
 
@@ -327,7 +333,7 @@ private struct FeedbackBanner: View {
 
     var body: some View {
         Label(feedback.message, systemImage: feedback.symbol)
-            .font(Typography.callout.weight(.semibold))
+            .appFont(.text(.callout, .semibold))
             .foregroundStyle(tint)
             .padding(.horizontal, Spacing.md)
             .padding(.vertical, Spacing.xs + 2)

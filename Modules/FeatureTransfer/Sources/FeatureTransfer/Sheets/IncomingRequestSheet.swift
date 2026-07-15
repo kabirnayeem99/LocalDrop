@@ -27,7 +27,7 @@ struct IncomingRequestSheet: View {
                     Spacer(minLength: 0)
                     Button(selectionToggleTitle, action: toggleSelectAll)
                         .buttonStyle(.plain)
-                        .font(Typography.callout.weight(.semibold))
+                        .appFont(.text(.callout, .semibold))
                         .foregroundStyle(accentTheme.primary)
                         .disabled(request.files.isEmpty)
                 }
@@ -47,11 +47,11 @@ struct IncomingRequestSheet: View {
                                 .foregroundStyle(selectedFileIDs.contains(file.id) ? accentTheme.primary : .secondary)
                                 .frame(width: 20)
                             Text(file.name)
-                                .font(Typography.body)
+                                .appFont(.body)
                                 .foregroundStyle(.primary)
                             Spacer()
                             Text(file.size)
-                                .font(Typography.callout)
+                                .appFont(.callout)
                                 .foregroundStyle(.secondary)
                         }
                         .padding(.horizontal, Spacing.sm)
@@ -73,8 +73,10 @@ struct IncomingRequestSheet: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(Text(file.name))
-                    .accessibilityValue(Text(selectedFileIDs.contains(file.id) ? "Selected" : "Not selected"))
-                    .accessibilityHint(Text("incomingRequest.fileSelectionHint"))
+                    .accessibilityValue(Text(selectedFileIDs.contains(file.id)
+                        ? FeatureTransferLocalization.resource("incomingRequest.fileSelected")
+                        : FeatureTransferLocalization.resource("incomingRequest.fileNotSelected")))
+                    .accessibilityHint(Text(FeatureTransferLocalization.resource("incomingRequest.fileSelectionHint")))
                     .opacity(appeared ? 1 : 0)
                     .offset(y: reduceMotion || appeared ? 0 : 8)
                     .animation(
@@ -98,7 +100,7 @@ struct IncomingRequestSheet: View {
 
             HStack(spacing: Spacing.xs + Spacing.xxs) {
                 Button(action: onDecline) {
-                    Text("incomingRequest.decline").frame(maxWidth: .infinity)
+                    Text(FeatureTransferLocalization.resource("incomingRequest.decline")).frame(maxWidth: .infinity)
                 }
                 .controlSize(.large)
                 .buttonStyle(.bordered)
@@ -140,23 +142,23 @@ struct IncomingRequestSheet: View {
                 .animation(reduceMotion ? nil : .easeOut(duration: 0.28), value: appeared)
 
             VStack(spacing: Spacing.xxs) {
-                Text(String(format: String(localized: .init("incomingRequest.titleFormat"), bundle: .module), request.deviceName))
-                    .font(Typography.title3.weight(.bold))
+                Text(FeatureTransferLocalization.format("incomingRequest.titleFormat", request.deviceName))
+                    .appFont(.text(.title3, .bold))
                     .foregroundStyle(.primary)
                     .multilineTextAlignment(.center)
 
                 Text(request.subtitle)
-                    .font(Typography.body)
+                    .appFont(.body)
                     .foregroundStyle(.secondary)
             }
 
             HStack(spacing: Spacing.sm) {
-                Label("incomingRequest.fromDevice", systemImage: request.sourceKind.symbol)
-                    .font(Typography.subheadline.weight(.semibold))
+                Label(FeatureTransferLocalization.resource("incomingRequest.fromDevice"), systemImage: request.sourceKind.symbol)
+                    .appFont(.text(.subheadline, .semibold))
                     .foregroundStyle(accentTheme.primary)
                 Spacer(minLength: 0)
                 Text(request.deviceName)
-                    .font(Typography.callout.weight(.semibold))
+                    .appFont(.text(.callout, .semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
             }
@@ -171,18 +173,18 @@ struct IncomingRequestSheet: View {
     }
 
     private var acceptTitle: String {
-        guard request.files.isEmpty == false else { return String(localized: .init("incomingRequest.accept"), bundle: .module) }
+        guard request.files.isEmpty == false else { return FeatureTransferLocalization.string(forKey: "incomingRequest.accept") }
         return selectionState.acceptsAll
-            ? String(localized: .init("incomingRequest.accept"), bundle: .module)
-            : String(localized: .init("incomingRequest.acceptSelected"), bundle: .module)
+            ? FeatureTransferLocalization.string(forKey: "incomingRequest.accept")
+            : FeatureTransferLocalization.string(forKey: "incomingRequest.acceptSelected")
     }
 
-    private var selectionToggleTitle: LocalizedStringKey {
+    private var selectionToggleTitle: LocalizedStringResource {
         switch selectionState {
         case .all:
-            return "incomingRequest.clearSelection"
+            return FeatureTransferLocalization.resource("incomingRequest.clearSelection")
         case .none, .partial:
-            return "incomingRequest.selectAll"
+            return FeatureTransferLocalization.resource("incomingRequest.selectAll")
         }
     }
 
@@ -219,7 +221,7 @@ private struct SelectionSummaryBadge: View {
 
     var body: some View {
         Text(label)
-            .font(Typography.subheadline.weight(.semibold))
+            .appFont(.text(.subheadline, .semibold))
             .foregroundStyle(tint)
             .padding(.horizontal, Spacing.sm)
             .padding(.vertical, Spacing.xxs + 1)
@@ -229,15 +231,11 @@ private struct SelectionSummaryBadge: View {
     private var label: String {
         switch selectionState {
         case .all(let totalCount):
-            return String(format: String(localized: .init("incomingRequest.selectionAll"), bundle: .module), totalCount)
+            return FeatureTransferLocalization.format("incomingRequest.selectionAll", totalCount)
         case .partial(let selectedCount, let totalCount):
-            return String(
-                format: String(localized: .init("incomingRequest.selectionPartial"), bundle: .module),
-                selectedCount,
-                totalCount
-            )
+            return FeatureTransferLocalization.format("incomingRequest.selectionPartial", selectedCount, totalCount)
         case .none:
-            return String(localized: .init("incomingRequest.selectionNone"), bundle: .module)
+            return FeatureTransferLocalization.string(forKey: "incomingRequest.selectionNone")
         }
     }
 

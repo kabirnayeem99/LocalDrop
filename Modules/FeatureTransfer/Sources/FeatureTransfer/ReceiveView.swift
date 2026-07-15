@@ -11,25 +11,25 @@ struct ReceiveView: View {
                 .frame(width: 220, height: 220)
 
             Text(store.deviceName)
-                .font(.system(size: 30, weight: .bold))
+                .appFont(.fixed(30, .bold))
                 .foregroundStyle(.primary)
                 .padding(.top, Spacing.xl + Spacing.xxs)
 
-            (Text("receive.waiting")
+            (Text(FeatureTransferLocalization.resource("receive.waiting"))
                 .foregroundStyle(.secondary)
-             + Text("#\(store.waitingIdentifier)")
+             + Text(verbatim: "#\(store.waitingIdentifier)")
                 .foregroundStyle(accentTheme.primary))
-                .font(Typography.body.weight(.medium))
+                .appFont(.text(.body, .medium))
                 .padding(.top, Spacing.xxs)
 
             VStack(spacing: Spacing.sm) {
-                Text("receive.quickSave")
-                    .font(Typography.caption1.weight(.semibold))
+                Text(FeatureTransferLocalization.resource("receive.quickSave"))
+                    .appFont(.text(.caption, .semibold))
                     .textCase(.uppercase)
                     .kerning(0.3)
                     .foregroundStyle(.secondary)
 
-                Picker("receive.quickSave", selection: $store.quickSave) {
+                Picker(FeatureTransferLocalization.string(forKey: "receive.quickSave"), selection: $store.quickSave) {
                     ForEach(QuickSaveMode.allCases) { mode in
                         Text(mode.label).tag(mode)
                     }
@@ -66,7 +66,7 @@ private struct ReceiveHero: View {
             }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("LocalDrop is discoverable")
+        .accessibilityLabel(Text(FeatureTransferLocalization.resource("receive.discoverable")))
     }
 
     private func hero(at date: Date, animated: Bool) -> some View {

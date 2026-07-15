@@ -1,4 +1,5 @@
 import AppKit
+import CoreText
 import SwiftUI
 import FeatureTransfer
 import Darwin
@@ -15,6 +16,8 @@ struct LocalDropApp: App {
     @State private var textEntryDraft = ""
 
     init() {
+        AppFontRegistrar.registerBundledFonts()
+
         let arguments = ProcessInfo.processInfo.arguments
         let isUITesting = arguments.contains("--ui-testing")
         let enableIncomingPINForUITests = arguments.contains("--ui-testing-incoming-pin-enabled")
@@ -265,6 +268,22 @@ struct LocalDropApp: App {
             return url
         }
         container.stageImportedItems(urls)
+    }
+}
+
+private enum AppFontRegistrar {
+    static func registerBundledFonts() {
+        guard let fontsDirectory = Bundle.main.resourceURL?.appendingPathComponent("Fonts", isDirectory: true),
+              let fontURLs = try? FileManager.default.contentsOfDirectory(
+                at: fontsDirectory,
+                includingPropertiesForKeys: nil
+              ) else {
+            return
+        }
+
+        for url in fontURLs where url.pathExtension.lowercased() == "ttf" {
+            CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
+        }
     }
 }
 

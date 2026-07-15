@@ -25,10 +25,10 @@ struct HistoryRowView: View {
 
             VStack(alignment: .leading, spacing: Spacing.xxs) {
                 Text(entry.fileName)
-                    .font(Typography.headline)
+                    .appFont(.headline)
                     .foregroundStyle(.primary)
                 Text(entry.subtitle)
-                    .font(Typography.callout)
+                    .appFont(.callout)
                     .foregroundStyle(.secondary)
             }
             .lineLimit(1)
@@ -37,10 +37,10 @@ struct HistoryRowView: View {
 
             VStack(alignment: .trailing, spacing: Spacing.xxs) {
                 Text(entry.timestampDisplay)
-                    .font(Typography.subheadline)
+                    .appFont(.subheadline)
                     .foregroundStyle(.secondary)
                 Label(entry.outcome.label, systemImage: entry.outcome.symbol)
-                    .font(Typography.subheadline.weight(.semibold))
+                    .appFont(.text(.subheadline, .semibold))
                     .foregroundStyle(outcomeTint)
                     .labelStyle(.titleAndIcon)
             }
@@ -72,12 +72,12 @@ struct HistoryRowView: View {
             Button {
                 store.revealInFinder(entry)
             } label: {
-                Label("history.revealInFinder", systemImage: "folder")
+                Label(FeatureTransferLocalization.resource("history.revealInFinder"), systemImage: "folder")
             }
             Button {
                 store.openHistoryItem(entry)
             } label: {
-                Label("history.open", systemImage: "arrow.up.forward.app")
+                Label(FeatureTransferLocalization.resource("history.open"), systemImage: "arrow.up.forward.app")
             }
         } label: {
             Image(systemName: "ellipsis.circle")
@@ -88,7 +88,7 @@ struct HistoryRowView: View {
         .menuIndicator(.hidden)
         .frame(width: 24)
         .disabled(hasFile == false)
-        .help(hasFile ? "history.rowHelp" : "history.locationUnavailable")
+        .help(Text(FeatureTransferLocalization.resource(hasFile ? "history.rowHelp" : "history.locationUnavailable")))
     }
 
     private var directionSymbol: String {

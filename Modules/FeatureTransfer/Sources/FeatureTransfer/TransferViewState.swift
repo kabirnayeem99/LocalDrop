@@ -8,12 +8,12 @@ enum Screen: String, CaseIterable, Identifiable, Codable, Sendable {
 
     var id: String { rawValue }
 
-    var title: LocalizedStringKey {
+    var title: LocalizedStringResource {
         switch self {
-        case .receive: "screen.receive.title"
-        case .send: "screen.send.title"
-        case .history: "screen.history.title"
-        case .settings: "screen.settings.title"
+        case .receive: FeatureTransferLocalization.resource("screen.receive.title")
+        case .send: FeatureTransferLocalization.resource("screen.send.title")
+        case .history: FeatureTransferLocalization.resource("screen.history.title")
+        case .settings: FeatureTransferLocalization.resource("screen.settings.title")
         }
     }
 
@@ -34,11 +34,11 @@ enum QuickSaveMode: String, CaseIterable, Identifiable, Codable, Sendable {
 
     var id: String { rawValue }
 
-    var label: LocalizedStringKey {
+    var label: LocalizedStringResource {
         switch self {
-        case .off: "quicksave.mode.off"
-        case .favorites: "quicksave.mode.favorites"
-        case .on: "quicksave.mode.on"
+        case .off: FeatureTransferLocalization.resource("quicksave.mode.off")
+        case .favorites: FeatureTransferLocalization.resource("quicksave.mode.favorites")
+        case .on: FeatureTransferLocalization.resource("quicksave.mode.on")
         }
     }
 }
@@ -62,11 +62,11 @@ enum AppearanceSetting: String, CaseIterable, Identifiable, Codable, Sendable {
 
     var id: String { rawValue }
 
-    var label: LocalizedStringKey {
+    var label: LocalizedStringResource {
         switch self {
-        case .system: "appearance.system"
-        case .light: "appearance.light"
-        case .dark: "appearance.dark"
+        case .system: FeatureTransferLocalization.resource("appearance.system")
+        case .light: FeatureTransferLocalization.resource("appearance.light")
+        case .dark: FeatureTransferLocalization.resource("appearance.dark")
         }
     }
 
@@ -98,6 +98,29 @@ enum LanguageSetting: String, CaseIterable, Identifiable, Codable, Sendable {
     case korean
     case japanese
     case system
+
+    static var allCases: [LanguageSetting] {
+        [
+            .system,
+            .english,
+            .arabic,
+            .indonesian,
+            .urdu,
+            .bengali,
+            .hindi,
+            .turkish,
+            .french,
+            .russian,
+            .uyghur,
+            .simplifiedChinese,
+            .spanish,
+            .brazilianPortuguese,
+            .german,
+            .vietnamese,
+            .korean,
+            .japanese
+        ]
+    }
 
     var id: String { rawValue }
 

@@ -35,7 +35,7 @@ struct SendView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                sectionTitle("send.selectionTitle")
+                sectionTitle(FeatureTransferLocalization.resource("send.selectionTitle"))
 
                 LazyVGrid(columns: selectionColumns, spacing: Spacing.sm) {
                     ForEach(SendEntryKind.allCases) { type in
@@ -61,20 +61,20 @@ struct SendView: View {
                 }
 
                 HStack {
-                    Text("send.nearbyDevices")
-                        .font(Typography.headline)
+                    Text(FeatureTransferLocalization.resource("send.nearbyDevices"))
+                        .appFont(.headline)
                         .foregroundStyle(.primary)
                     Spacer()
                     HStack(spacing: 0) {
                         Button { store.refreshNearbyPeers() } label: {
                             RefreshIcon(isRefreshing: store.isRefreshingDiscovery)
                         }
-                        .help(store.isRefreshingDiscovery ? "root.refreshingDiscovery" : "root.refresh")
+                        .help(Text(FeatureTransferLocalization.resource(store.isRefreshingDiscovery ? "root.refreshingDiscovery" : "root.refresh")))
                         .disabled(store.isRefreshingDiscovery)
                         Button { store.scanNearbyPeers() } label: {
                             ScanIcon(isScanning: store.isScanningDiscovery)
                         }
-                        .help(store.isScanningDiscovery ? "send.scanning" : "send.scan")
+                        .help(Text(FeatureTransferLocalization.resource(store.isScanningDiscovery ? "send.scanning" : "send.scan")))
                         .disabled(store.isScanningDiscovery)
                     }
                     .buttonStyle(.borderless)
@@ -155,19 +155,19 @@ struct SendView: View {
         )
     }
 
-    private func sectionTitle(_ text: LocalizedStringKey) -> some View {
+    private func sectionTitle(_ text: LocalizedStringResource) -> some View {
         Text(text)
-            .font(Typography.headline)
+            .appFont(.headline)
             .foregroundStyle(.primary)
     }
 
     private var stagedItemsSection: some View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
             HStack(alignment: .firstTextBaseline, spacing: Spacing.sm) {
-                sectionTitle("send.stagedItems")
+                sectionTitle(FeatureTransferLocalization.resource("send.stagedItems"))
                 Spacer(minLength: 0)
                 Text(store.stagedItems.stagedBatchSummaryLabel)
-                    .font(Typography.subheadline)
+                    .appFont(.subheadline)
                     .foregroundStyle(.secondary)
                     .accessibilityIdentifier("send-staged-summary")
             }
@@ -236,7 +236,7 @@ private struct SelectionTypeButton: View {
                     .font(.system(size: 24, weight: .regular))
                     .foregroundStyle(isSelected ? .white : accentTheme.primary)
                 Text(label)
-                    .font(Typography.headline)
+                    .appFont(.headline)
                     .foregroundStyle(isSelected ? .white : .primary)
             }
             .frame(maxWidth: .infinity)
@@ -319,10 +319,10 @@ private struct NearbyDevicesEmptyState: View {
 
             VStack(alignment: .leading, spacing: Spacing.xxs) {
                 Text(titleKey)
-                    .font(Typography.headline)
+                    .appFont(.headline)
                     .foregroundStyle(.primary)
                 Text(messageKey)
-                    .font(Typography.callout)
+                    .appFont(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -354,29 +354,29 @@ private struct NearbyDevicesEmptyState: View {
         .accessibilityHidden(true)
     }
 
-    private var titleKey: LocalizedStringKey {
+    private var titleKey: LocalizedStringResource {
         switch state {
         case .emptyIdle:
-            return "send.noDevices"
+            return FeatureTransferLocalization.resource("send.noDevices")
         case .emptyRefreshing:
-            return "send.refreshingDevices"
+            return FeatureTransferLocalization.resource("send.refreshingDevices")
         case .emptyScanning:
-            return "send.scanningDevices"
+            return FeatureTransferLocalization.resource("send.scanningDevices")
         case .results:
-            return "send.noDevices"
+            return FeatureTransferLocalization.resource("send.noDevices")
         }
     }
 
-    private var messageKey: LocalizedStringKey {
+    private var messageKey: LocalizedStringResource {
         switch state {
         case .emptyIdle:
-            return "send.noDevicesHelp"
+            return FeatureTransferLocalization.resource("send.noDevicesHelp")
         case .emptyRefreshing:
-            return "send.refreshingDevicesHelp"
+            return FeatureTransferLocalization.resource("send.refreshingDevicesHelp")
         case .emptyScanning:
-            return "send.scanningDevicesHelp"
+            return FeatureTransferLocalization.resource("send.scanningDevicesHelp")
         case .results:
-            return "send.noDevicesHelp"
+            return FeatureTransferLocalization.resource("send.noDevicesHelp")
         }
     }
 }
@@ -457,10 +457,10 @@ private struct StagedFileChip: View {
 
             VStack(alignment: .leading, spacing: Spacing.xxs) {
                 Text(file.name)
-                    .font(Typography.headline)
+                    .appFont(.headline)
                     .foregroundStyle(.primary)
                 Text(file.subtitle)
-                    .font(Typography.callout)
+                    .appFont(.callout)
                     .foregroundStyle(.secondary)
             }
             .lineLimit(1)
@@ -475,7 +475,7 @@ private struct StagedFileChip: View {
                     .background(Color(nsColor: .systemGray).opacity(0.15), in: Circle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(Text(String(format: String(localized: .init("send.removeItem"), bundle: .module), file.name)))
+            .accessibilityLabel(Text(FeatureTransferLocalization.format("send.removeItem", file.name)))
         }
         .padding(.horizontal, Spacing.md - Spacing.xxs)
         .padding(.vertical, Spacing.sm)

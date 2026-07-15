@@ -284,10 +284,10 @@ enum TransferOutcome: String, Equatable, Codable, Sendable {
     case completed
     case declined
 
-    var label: LocalizedStringKey {
+    var label: LocalizedStringResource {
         switch self {
-        case .completed: "transfer.outcome.completed"
-        case .declined: "transfer.outcome.declined"
+        case .completed: FeatureTransferLocalization.resource("transfer.outcome.completed")
+        case .declined: FeatureTransferLocalization.resource("transfer.outcome.declined")
         }
     }
 
@@ -472,23 +472,34 @@ enum AccentColorChoice: String, CaseIterable, Codable, Identifiable, Sendable {
 
     var id: String { rawValue }
 
-    var label: LocalizedStringKey {
+    static let selectableCases: [AccentColorChoice] = [
+        .medinaEmerald,
+        .samarkandTeal,
+        .iznikBlue,
+        .andalusianGold,
+        .ottomanCrimson,
+        .cordobaBurgundy,
+        .umayyadPearl,
+        .abbasidObsidian
+    ]
+
+    var label: LocalizedStringResource {
         switch self {
-        case .systemBlue: "accent.blue"
-        case .systemGreen: "accent.green"
-        case .systemPurple: "accent.purple"
-        case .systemOrange: "accent.orange"
-        case .systemPink: "accent.pink"
-        case .systemTeal: "accent.teal"
-        case .system: "accent.system"
-        case .medinaEmerald: "accent.medinaEmerald"
-        case .samarkandTeal: "accent.samarkandTeal"
-        case .iznikBlue: "accent.iznikBlue"
-        case .andalusianGold: "accent.andalusianGold"
-        case .ottomanCrimson: "accent.ottomanCrimson"
-        case .cordobaBurgundy: "accent.cordobaBurgundy"
-        case .umayyadPearl: "accent.umayyadPearl"
-        case .abbasidObsidian: "accent.abbasidObsidian"
+        case .systemBlue: FeatureTransferLocalization.resource("accent.blue")
+        case .systemGreen: FeatureTransferLocalization.resource("accent.green")
+        case .systemPurple: FeatureTransferLocalization.resource("accent.purple")
+        case .systemOrange: FeatureTransferLocalization.resource("accent.orange")
+        case .systemPink: FeatureTransferLocalization.resource("accent.pink")
+        case .systemTeal: FeatureTransferLocalization.resource("accent.teal")
+        case .system: FeatureTransferLocalization.resource("accent.system")
+        case .medinaEmerald: FeatureTransferLocalization.resource("accent.medinaEmerald")
+        case .samarkandTeal: FeatureTransferLocalization.resource("accent.samarkandTeal")
+        case .iznikBlue: FeatureTransferLocalization.resource("accent.iznikBlue")
+        case .andalusianGold: FeatureTransferLocalization.resource("accent.andalusianGold")
+        case .ottomanCrimson: FeatureTransferLocalization.resource("accent.ottomanCrimson")
+        case .cordobaBurgundy: FeatureTransferLocalization.resource("accent.cordobaBurgundy")
+        case .umayyadPearl: FeatureTransferLocalization.resource("accent.umayyadPearl")
+        case .abbasidObsidian: FeatureTransferLocalization.resource("accent.abbasidObsidian")
         }
     }
 

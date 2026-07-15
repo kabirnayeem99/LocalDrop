@@ -22,15 +22,15 @@ public struct SendTextEntrySheet: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: Spacing.md) {
-            Text("Send Text")
-                .font(Typography.title2.weight(.bold))
+            Text(FeatureTransferLocalization.resource("sendText.title"))
+                .appFont(.text(.title2, .bold))
 
-            Text("LocalDrop saves this text as a temporary .txt file before sending it.")
-                .font(Typography.callout)
+            Text(FeatureTransferLocalization.resource("sendText.description"))
+                .appFont(.callout)
                 .foregroundStyle(.secondary)
 
             TextEditor(text: $draft)
-                .font(Typography.body)
+                .appFont(.body)
                 .frame(minHeight: 220)
                 .padding(Spacing.xs)
                 .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle.continuous(Radius.lg))
@@ -41,15 +41,15 @@ public struct SendTextEntrySheet: View {
                 .focused($isEditorFocused)
 
             Text(validationMessage)
-                .font(Typography.caption1)
+                .appFont(.caption1)
                 .foregroundStyle(trimmedDraft.isEmpty && hasAttemptedSubmit ? SemanticColor.destructive : .secondary)
 
             HStack {
                 Spacer()
-                Button("Cancel") {
+                Button(FeatureTransferLocalization.resource("general.cancel")) {
                     onCancel()
                 }
-                Button("Stage Text") {
+                Button(FeatureTransferLocalization.resource("sendText.stageText")) {
                     submit()
                 }
                 .keyboardShortcut(.defaultAction)
@@ -69,9 +69,11 @@ public struct SendTextEntrySheet: View {
 
     private var validationMessage: String {
         if trimmedDraft.isEmpty {
-            return hasAttemptedSubmit ? "Enter text to stage a .txt file." : "Paste or type text to stage a .txt file."
+            return hasAttemptedSubmit
+                ? FeatureTransferLocalization.string(forKey: "sendText.validationEmpty")
+                : FeatureTransferLocalization.string(forKey: "sendText.validationHint")
         }
-        return "Your text will be staged as a plain-text file on the Send screen."
+        return FeatureTransferLocalization.string(forKey: "sendText.validationInfo")
     }
 
     private var validationTint: Color {

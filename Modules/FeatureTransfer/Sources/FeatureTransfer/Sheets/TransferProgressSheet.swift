@@ -48,10 +48,10 @@ struct TransferProgressSheet: View {
 
                 VStack(alignment: .leading, spacing: Spacing.xxs) {
                     Text(titleText)
-                        .font(Typography.title3.weight(.bold))
+                        .appFont(.text(.title3, .bold))
                         .foregroundStyle(.primary)
-                    Text("\(progress.fileName) · \(percent)% · \(progress.throughput)")
-                        .font(Typography.callout)
+                    Text(verbatim: "\(progress.fileName) · \(percent)% · \(progress.throughput)")
+                        .appFont(.callout)
                         .foregroundStyle(.secondary)
                         .monospacedStat()
                         .contentTransition(reduceMotion ? .identity : .numericText())
@@ -67,26 +67,30 @@ struct TransferProgressSheet: View {
                 .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: normalizedProgress)
 
             HStack {
-                Text(String(format: String(localized: .init("transfer.progress.percentComplete"), bundle: .module), percent))
+                Text(FeatureTransferLocalization.format("transfer.progress.percentComplete", percent))
                 Spacer()
-                Text(isComplete ? "transfer.progress.done" : progress.etaDescription)
+                if isComplete {
+                    Text(FeatureTransferLocalization.resource("transfer.progress.done"))
+                } else {
+                    Text(progress.etaDescription)
+                }
             }
-            .font(Typography.subheadline)
+            .appFont(.subheadline)
             .foregroundStyle(.secondary)
             .monospacedStat()
             .contentTransition(reduceMotion ? .identity : .numericText())
             .padding(.top, Spacing.xs)
 
             if isComplete {
-                Label("transfer.progress.complete", systemImage: "checkmark.circle.fill")
-                    .font(Typography.callout.weight(.semibold))
+                Label(FeatureTransferLocalization.resource("transfer.progress.complete"), systemImage: "checkmark.circle.fill")
+                    .appFont(.text(.callout, .semibold))
                     .foregroundStyle(SemanticColor.success)
                     .frame(maxWidth: .infinity)
                     .padding(.top, Spacing.md + 2)
                     .transition(.opacity.combined(with: .scale(scale: 0.96)))
             } else {
                 Button(role: .destructive, action: onCancel) {
-                    Text("general.cancel").frame(maxWidth: .infinity)
+                    Text(FeatureTransferLocalization.resource("general.cancel")).frame(maxWidth: .infinity)
                 }
                 .controlSize(.large)
                 .buttonStyle(.bordered)
@@ -103,12 +107,12 @@ struct TransferProgressSheet: View {
         switch progress.direction {
         case .sending:
             return isComplete
-                ? String(format: String(localized: .init("transfer.sentTo"), bundle: .module), progress.counterpartName)
-                : String(format: String(localized: .init("transfer.progress.sendingTo"), bundle: .module), progress.counterpartName)
+                ? FeatureTransferLocalization.format("transfer.sentTo", progress.counterpartName)
+                : FeatureTransferLocalization.format("transfer.progress.sendingTo", progress.counterpartName)
         case .receiving:
             return isComplete
-                ? String(format: String(localized: .init("transfer.receivedFrom"), bundle: .module), progress.counterpartName)
-                : String(format: String(localized: .init("transfer.progress.receivingFrom"), bundle: .module), progress.counterpartName)
+                ? FeatureTransferLocalization.format("transfer.receivedFrom", progress.counterpartName)
+                : FeatureTransferLocalization.format("transfer.progress.receivingFrom", progress.counterpartName)
         }
     }
 }

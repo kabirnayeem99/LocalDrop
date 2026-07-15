@@ -35,10 +35,10 @@ struct DeviceCardView: View {
 
                 VStack(alignment: .leading, spacing: Spacing.xxs) {
                     Text(device.name)
-                        .font(Typography.headline)
+                        .appFont(.headline)
                         .foregroundStyle(.primary)
                     Text(device.subtitle)
-                        .font(Typography.callout)
+                        .appFont(.callout)
                         .foregroundStyle(.secondary)
                 }
                 .lineLimit(1)

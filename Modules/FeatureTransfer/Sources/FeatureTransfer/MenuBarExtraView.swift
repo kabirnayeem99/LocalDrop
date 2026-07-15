@@ -52,26 +52,26 @@ struct TransferMenuBarExtraView: View {
         }
         Divider()
 
-        Button("menubar.sendFile") {
+        Button(FeatureTransferLocalization.resource("menubar.sendFile")) {
             actions.sendFiles()
         }
         .keyboardShortcut("s", modifiers: [.command, .shift])
 
-        Button("menubar.sendFolder") {
+        Button(FeatureTransferLocalization.resource("menubar.sendFolder")) {
             actions.sendFolders()
         }
 
-        Button("menubar.sendTextOrClipboard") {
+        Button(FeatureTransferLocalization.resource("menubar.sendTextOrClipboard")) {
             actions.sendTextOrClipboard()
         }
 
         Divider()
 
-        Menu("menubar.sendToNearby") {
+        Menu {
             if store.stagedItems.isEmpty {
-                Text("menubar.stageFirst")
+                Text(FeatureTransferLocalization.resource("menubar.stageFirst"))
             } else if store.nearbyPeers.isEmpty {
-                Text("send.noDevices")
+                Text(FeatureTransferLocalization.resource("send.noDevices"))
             } else {
                 ForEach(store.nearbyPeers) { peer in
                     Button(peer.name) {
@@ -82,10 +82,12 @@ struct TransferMenuBarExtraView: View {
 
             Divider()
 
-            Button("root.refresh") {
+            Button(FeatureTransferLocalization.resource("root.refresh")) {
                 store.refreshNearbyPeers()
             }
             .keyboardShortcut("r", modifiers: [.command])
+        } label: {
+            Text(FeatureTransferLocalization.resource("menubar.sendToNearby"))
         }
 
         let receivingTitle = FeatureTransferLocalization.format("menubar.receivingTitle", store.quickSave.menuLabel)
@@ -99,7 +101,7 @@ struct TransferMenuBarExtraView: View {
 
             Divider()
 
-            Button("menubar.pauseReceiving") {}
+            Button(FeatureTransferLocalization.resource("menubar.pauseReceiving")) {}
                 .disabled(true)
         } label: {
             Text(receivingTitle)
@@ -109,7 +111,7 @@ struct TransferMenuBarExtraView: View {
             Divider()
 
             Text(summary.activeTransferTitle ?? FeatureTransferLocalization.string(forKey: "menubar.activeTransfer"))
-            Button("general.cancel") {
+            Button(FeatureTransferLocalization.resource("general.cancel")) {
                 store.cancelActiveTransfer()
             }
             .disabled(activeTransfer.progress >= 1)
@@ -119,19 +121,19 @@ struct TransferMenuBarExtraView: View {
             Divider()
 
             Text(summary.incomingRequestTitle ?? FeatureTransferLocalization.string(forKey: "menubar.incomingRequest"))
-            Button("incomingRequest.accept") {
+            Button(FeatureTransferLocalization.resource("incomingRequest.accept")) {
                 store.acceptIncomingRequest()
             }
-            Button("incomingRequest.decline") {
+            Button(FeatureTransferLocalization.resource("incomingRequest.decline")) {
                 store.declineIncomingRequest()
             }
         }
 
         Divider()
 
-        Menu("menubar.recentTransfers") {
+        Menu {
             if summary.recentHistoryEntries.isEmpty {
-                Text("history.noTransfers")
+                Text(FeatureTransferLocalization.resource("history.noTransfers"))
             } else {
                 ForEach(summary.recentHistoryEntries) { entry in
                     Text(entry.menuTitle)
@@ -140,20 +142,22 @@ struct TransferMenuBarExtraView: View {
 
             Divider()
 
-            Button("menubar.showAllHistory") {
+            Button(FeatureTransferLocalization.resource("menubar.showAllHistory")) {
                 store.screen = .history
                 actions.openLocalDrop()
             }
+        } label: {
+            Text(FeatureTransferLocalization.resource("menubar.recentTransfers"))
         }
 
         Divider()
 
-        Button("menubar.openLocalDrop") {
+        Button(FeatureTransferLocalization.resource("menubar.openLocalDrop")) {
             actions.openLocalDrop()
         }
         .keyboardShortcut("o", modifiers: [.command])
 
-        Button("menubar.preferences") {
+        Button(FeatureTransferLocalization.resource("menubar.preferences")) {
             store.screen = .settings
             actions.openPreferences()
         }
@@ -161,7 +165,7 @@ struct TransferMenuBarExtraView: View {
 
         Divider()
 
-        Button("menubar.quitLocalDrop") {
+        Button(FeatureTransferLocalization.resource("menubar.quitLocalDrop")) {
             actions.quit()
         }
         .keyboardShortcut("q", modifiers: [.command])

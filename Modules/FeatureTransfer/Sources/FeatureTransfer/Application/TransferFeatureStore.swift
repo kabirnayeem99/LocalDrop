@@ -23,7 +23,7 @@ final class TransferFeatureStore {
     var allowDownloads: Bool
     var useHTTPS: Bool
     var isRuntimeAvailable = false
-    var runtimeStatusText = "Starting LocalDrop runtime…"
+    var runtimeStatusText: String
     var nearbyPeers: [NearbyPeerItem] = []
     var stagedItems: [StagedTransferItem] = []
     var historyEntries: [HistoryEntry]
@@ -39,6 +39,7 @@ final class TransferFeatureStore {
     private let loginItemManaging: any LoginItemManaging
     private let logger: AppLogger
     static let maxHistoryEntries = 200
+    private var runtimeStatusKey = "runtime.starting"
     private var hasStarted = false
     @ObservationIgnored
     nonisolated(unsafe) private var observationTasks: [Task<Void, Never>] = []
@@ -76,6 +77,7 @@ final class TransferFeatureStore {
         self.allowDownloads = snapshot.protocolSettings.allowDownloads
         self.useHTTPS = snapshot.protocolSettings.useHTTPS
         self.historyEntries = historyPersistence.load()
+        self.runtimeStatusText = FeatureTransferLocalization.string(forKey: "runtime.starting")
     }
 
     deinit {
@@ -115,7 +117,7 @@ final class TransferFeatureStore {
         guard hasStarted == false else { return }
         hasStarted = true
         bindRuntimeStreamsIfNeeded()
-        runtimeStatusText = FeatureTransferLocalization.string(forKey: "runtime.starting")
+        setRuntimeStatus("runtime.starting")
         logger.emit(
             level: .info,
             event: "app.runtime.start.requested",
@@ -129,7 +131,7 @@ final class TransferFeatureStore {
         do {
             try await runtime.start()
             isRuntimeAvailable = true
-            runtimeStatusText = FeatureTransferLocalization.string(forKey: "runtime.discoverable")
+            setRuntimeStatus("runtime.discoverable")
             logger.emit(
                 level: .info,
                 event: "app.runtime.start.succeeded",
@@ -142,9 +144,18 @@ final class TransferFeatureStore {
             await runtime.refreshDiscovery()
         } catch {
             isRuntimeAvailable = false
-            runtimeStatusText = FeatureTransferLocalization.string(forKey: "runtime.unavailable")
+            setRuntimeStatus("runtime.unavailable")
             recordError(event: "app.runtime.start.failed", error: error)
         }
+    }
+
+    func refreshLocalizedStatusText() {
+        runtimeStatusText = FeatureTransferLocalization.string(forKey: runtimeStatusKey)
+    }
+
+    private func setRuntimeStatus(_ key: String) {
+        runtimeStatusKey = key
+        runtimeStatusText = FeatureTransferLocalization.string(forKey: key)
     }
 
     func stop() async {

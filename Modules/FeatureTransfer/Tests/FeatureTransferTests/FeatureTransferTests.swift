@@ -1420,10 +1420,10 @@ final class FeatureTransferTests: XCTestCase {
 
     func testLanguageSettingCaseIterableOrderMatchesProductPriority() {
         let expected: [LanguageSetting] = [
-            .arabic, .indonesian, .urdu, .bengali, .hindi, .turkish,
-            .english, .french, .russian, .uyghur, .simplifiedChinese,
-            .spanish, .brazilianPortuguese, .german, .vietnamese,
-            .korean, .japanese, .system
+            .system, .english, .arabic, .indonesian, .urdu, .bengali,
+            .hindi, .turkish, .french, .russian, .uyghur,
+            .simplifiedChinese, .spanish, .brazilianPortuguese,
+            .german, .vietnamese, .korean, .japanese
         ]
         XCTAssertEqual(LanguageSetting.allCases, expected)
     }

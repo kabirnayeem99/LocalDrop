@@ -529,6 +529,26 @@ final class FeatureTransferTests: XCTestCase {
         )
     }
 
+    func testGenerateIncomingPINUsesMemorable710PrefixWhenSelected() {
+        let pin = TransferProtocolSettings.generateIncomingPIN(
+            prefixRoll: 0,
+            suffixValue: 42,
+            fallbackValue: 999_999
+        )
+
+        XCTAssertEqual(pin, "710042")
+    }
+
+    func testGenerateIncomingPINFallsBackToSixDigitRandomValue() {
+        let pin = TransferProtocolSettings.generateIncomingPIN(
+            prefixRoll: 4,
+            suffixValue: 42,
+            fallbackValue: 321
+        )
+
+        XCTAssertEqual(pin, "000321")
+    }
+
     func testSettingsPersistenceLoadsLegacySnapshotWithoutIncomingPIN() throws {
         let suiteName = "FeatureTransferTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))

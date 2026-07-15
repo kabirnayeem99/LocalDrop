@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import DesignSystem
 
@@ -108,18 +109,10 @@ private struct BrandBadge: View {
     }
 
     var body: some View {
-        RoundedRectangle.continuous(Radius.xxl + Radius.lg)
-            .fill(accentTheme.primary)
+        Image(nsImage: NSApp.applicationIconImage)
+            .resizable()
+            .interpolation(.high)
             .frame(width: 128, height: 128)
-            .overlay {
-                RoundedRectangle.continuous(Radius.xxl + Radius.lg)
-                    .fill(.white.opacity(animated ? 0.10 + (sin(time * 1.6) + 1) * 0.035 : 0.08))
-                    .blendMode(.screen)
-            }
-            .overlay {
-                BrandMark(variant: .monoLight)
-                    .frame(width: 60, height: 60)
-            }
             .scaleEffect(scale)
             .shadow(color: accentTheme.primary.opacity(0.4), radius: animated ? 22 : 16, y: 12)
     }

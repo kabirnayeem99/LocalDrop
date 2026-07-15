@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import DesignSystem
 
@@ -88,13 +89,10 @@ struct RootView: View {
 
     private var sidebarHeader: some View {
         HStack(spacing: Spacing.sm - 1) {
-            RoundedRectangle.continuous(Radius.md)
-                .fill(accentTheme.primary)
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
+                .interpolation(.high)
                 .frame(width: 30, height: 30)
-                .overlay {
-                    BrandMark(variant: .monoLight)
-                        .frame(width: 17, height: 17)
-                }
             Text(FeatureTransferLocalization.resource("root.localDrop"))
                 .appFont(.text(.title3, .bold))
                 .foregroundStyle(.primary)

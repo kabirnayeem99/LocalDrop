@@ -35,6 +35,14 @@ public final class TransferFeatureContainer {
             .environment(\.accentTheme, store.accentColor.theme)
     }
 
+    public func applyingCurrentLanguageOverride<Content: View>(to view: Content) -> some View {
+        view.applyingLanguageOverride(store.language)
+    }
+
+    public func syncLocalizationLanguage() {
+        FeatureTransferLocalization.setLanguage(store.language)
+    }
+
     public var shouldMinimizeToMenuBar: Bool {
         store.minimizeToMenuBar
     }

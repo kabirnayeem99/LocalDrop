@@ -42,7 +42,7 @@ struct SendView: View {
                     ForEach(SendEntryKind.allCases) { type in
                         SelectionTypeButton(
                             symbol: type.symbol,
-                            label: type.label,
+                            label: type.labelResource,
                             isSelected: selectedSelectionType == type
                         ) {
                             selectedSelectionType = type
@@ -73,9 +73,13 @@ struct SendView: View {
                                     store.selectSendMode(mode)
                                 } label: {
                                     if store.sendMode == mode {
-                                        Label(sendModeLabel(for: mode), systemImage: "checkmark")
+                                        Label {
+                                            Text(sendModeResource(for: mode))
+                                        } icon: {
+                                            Image(systemName: "checkmark")
+                                        }
                                     } else {
-                                        Text(sendModeLabel(for: mode))
+                                        Text(sendModeResource(for: mode))
                                     }
                                 }
                             }
@@ -84,7 +88,11 @@ struct SendView: View {
                                 isSendModeHelpPresented = true
                             }
                         } label: {
-                            Label(sendModeLabel(for: store.sendMode), systemImage: sendModeSymbol(for: store.sendMode))
+                            Label {
+                                Text(sendModeResource(for: store.sendMode))
+                            } icon: {
+                                Image(systemName: sendModeSymbol(for: store.sendMode))
+                            }
                         }
                         .help(Text(FeatureTransferLocalization.resource("send.mode.help")))
 
@@ -189,7 +197,7 @@ struct SendView: View {
     }
 
     var resolvedDropZoneLabel: String {
-        FeatureTransferLocalization.string(forKey: "send.dropZoneLabel")
+        String(localized: "send.dropZoneLabel", bundle: FeatureTransferLocalization.bundle)
     }
 
     private var stagedItemsSection: some View {
@@ -251,14 +259,14 @@ struct SendView: View {
         dropZoneResetTask = nil
     }
 
-    private func sendModeLabel(for mode: SendMode) -> String {
+    private func sendModeResource(for mode: SendMode) -> LocalizedStringResource {
         switch mode {
         case .single:
-            FeatureTransferLocalization.string(forKey: "send.mode.single")
+            FeatureTransferLocalization.resource("send.mode.single")
         case .multiple:
-            FeatureTransferLocalization.string(forKey: "send.mode.multiple")
+            FeatureTransferLocalization.resource("send.mode.multiple")
         case .link:
-            FeatureTransferLocalization.string(forKey: "send.mode.link")
+            FeatureTransferLocalization.resource("send.mode.link")
         }
     }
 
@@ -301,7 +309,7 @@ private struct SendModeHelpSheet: View {
 
 private struct SelectionTypeButton: View {
     let symbol: String
-    let label: String
+    let label: LocalizedStringResource
     let isSelected: Bool
     let action: () -> Void
     @State private var hovering = false

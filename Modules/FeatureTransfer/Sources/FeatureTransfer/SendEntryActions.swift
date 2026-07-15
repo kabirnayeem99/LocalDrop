@@ -36,16 +36,16 @@ enum SendEntryKind: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    var label: String {
+    var labelResource: LocalizedStringResource {
         switch self {
         case .file:
-            return FeatureTransferLocalization.string(forKey: "sendEntryKind.file")
+            return FeatureTransferLocalization.resource("sendEntryKind.file")
         case .folder:
-            return FeatureTransferLocalization.string(forKey: "sendEntryKind.folder")
+            return FeatureTransferLocalization.resource("sendEntryKind.folder")
         case .text:
-            return FeatureTransferLocalization.string(forKey: "sendEntryKind.text")
+            return FeatureTransferLocalization.resource("sendEntryKind.text")
         case .paste:
-            return FeatureTransferLocalization.string(forKey: "sendEntryKind.paste")
+            return FeatureTransferLocalization.resource("sendEntryKind.paste")
         }
     }
 

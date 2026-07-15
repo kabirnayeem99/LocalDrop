@@ -19,27 +19,35 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            Section(FeatureTransferLocalization.string(forKey: "settings.section.general")) {
-                Picker(FeatureTransferLocalization.string(forKey: "settings.appearance"), selection: $store.appearance) {
+            Section {
+                Picker(selection: $store.appearance) {
                     ForEach(AppearanceSetting.allCases) { Text($0.label).tag($0) }
+                } label: {
+                    Text(FeatureTransferLocalization.resource("settings.appearance"))
                 }
                 .pickerStyle(.menu)
 
-                LabeledContent(FeatureTransferLocalization.string(forKey: "settings.accentColor")) {
+                LabeledContent {
                     AccentSwatchRow(selection: $store.accentColor)
+                } label: {
+                    Text(FeatureTransferLocalization.resource("settings.accentColor"))
                 }
 
-                Picker(FeatureTransferLocalization.string(forKey: "settings.language"), selection: $store.language) {
+                Picker(selection: $store.language) {
                     ForEach(LanguageSetting.allCases) { Text($0.label).tag($0) }
+                } label: {
+                    Text(FeatureTransferLocalization.resource("settings.language"))
                 }
                 .pickerStyle(.menu)
 
                 Toggle(FeatureTransferLocalization.resource("settings.minimizeToMenuBar"), isOn: $store.minimizeToMenuBar)
                 Toggle(FeatureTransferLocalization.resource("settings.launchAtLogin"), isOn: $store.launchAtLogin)
                 Toggle(FeatureTransferLocalization.resource("settings.reduceMotion"), isOn: $store.reduceMotion)
+            } header: {
+                Text(FeatureTransferLocalization.resource("settings.section.general"))
             }
 
-            Section(FeatureTransferLocalization.string(forKey: "settings.section.receiving")) {
+            Section {
                 LabeledContent {
                     Button(FeatureTransferLocalization.resource("settings.chooseSaveLocation")) { chooseSaveLocation() }
                 } label: {
@@ -67,6 +75,8 @@ struct SettingsView: View {
                 }
                 Toggle(FeatureTransferLocalization.resource("settings.autoAcceptFavorites"), isOn: $store.autoAcceptFavorites)
                     .help(Text(FeatureTransferLocalization.resource("settings.autoAcceptFavoritesHelp")))
+            } header: {
+                Text(FeatureTransferLocalization.resource("settings.section.receiving"))
             }
 
             Section(FeatureTransferLocalization.resource("settings.section.sending")) {
@@ -74,21 +84,25 @@ struct SettingsView: View {
                     .help(Text(FeatureTransferLocalization.resource("settings.shareViaLinkAutoAcceptHelp")))
             }
 
-            Section(FeatureTransferLocalization.string(forKey: "settings.section.network")) {
+            Section {
                 LabeledContent {
                     deviceNameControls
                 } label: {
                     deviceNameLabel
                 }
-                LabeledContent(FeatureTransferLocalization.string(forKey: "settings.port")) {
+                LabeledContent {
                     Text(store.port)
                         .foregroundStyle(.secondary)
                         .monospacedStat()
+                } label: {
+                    Text(FeatureTransferLocalization.resource("settings.port"))
                 }
                 Toggle(FeatureTransferLocalization.resource("settings.allowDownloads"), isOn: $store.allowDownloads)
                     .help(Text(FeatureTransferLocalization.resource("settings.allowDownloadsHelp")))
                 Toggle(FeatureTransferLocalization.resource("settings.useHTTPS"), isOn: $store.useHTTPS)
                     .help(Text(FeatureTransferLocalization.resource("settings.useHTTPSHelp")))
+            } header: {
+                Text(FeatureTransferLocalization.resource("settings.section.network"))
             }
 
         }
@@ -155,7 +169,7 @@ struct SettingsView: View {
 
     @ViewBuilder private var incomingPINField: some View {
         if showsIncomingPIN {
-            TextField(FeatureTransferLocalization.string(forKey: "settings.incomingPINPlaceholder"), text: $pinDraft)
+            TextField("", text: $pinDraft, prompt: Text(FeatureTransferLocalization.resource("settings.incomingPINPlaceholder")))
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 156)
                 .monospaced()
@@ -164,7 +178,7 @@ struct SettingsView: View {
                 .environment(\.layoutDirection, .leftToRight)
                 .onSubmit { applyIncomingPIN() }
         } else {
-            SecureField(FeatureTransferLocalization.string(forKey: "settings.incomingPINPlaceholder"), text: $pinDraft)
+            SecureField("", text: $pinDraft, prompt: Text(FeatureTransferLocalization.resource("settings.incomingPINPlaceholder")))
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 156)
                 .monospaced()
@@ -192,7 +206,7 @@ struct SettingsView: View {
 
     private var incomingPINLabel: some View {
         VStack(alignment: .leading, spacing: Spacing.xxs) {
-            Text(FeatureTransferLocalization.string(forKey: "settings.incomingPIN"))
+            Text(FeatureTransferLocalization.resource("settings.incomingPIN"))
             if let pinValidationMessage {
                 Text(pinValidationMessage)
                     .appFont(.caption1)
@@ -271,7 +285,7 @@ struct SettingsView: View {
             TextField(
                 "",
                 text: $deviceNameDraft,
-                prompt: Text(FeatureTransferLocalization.string(forKey: "settings.deviceName"))
+                prompt: Text(FeatureTransferLocalization.resource("settings.deviceName"))
             )
             .textFieldStyle(.roundedBorder)
             .frame(width: 240)
@@ -305,7 +319,7 @@ struct SettingsView: View {
 
     private var deviceNameLabel: some View {
         VStack(alignment: .leading, spacing: Spacing.xxs) {
-            Text(FeatureTransferLocalization.string(forKey: "settings.deviceName"))
+            Text(FeatureTransferLocalization.resource("settings.deviceName"))
             if let deviceNameValidationMessage {
                 Text(deviceNameValidationMessage)
                     .appFont(.caption1)

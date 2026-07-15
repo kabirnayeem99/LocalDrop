@@ -42,6 +42,18 @@ public enum FeatureTransferLocalization {
         LocalizedStringResource(key, bundle: .atURL(bundle.bundleURL))
     }
 
+    public static func resource(_ key: String) -> LocalizedStringResource {
+        LocalizedStringResource(.init(key), bundle: .atURL(bundle.bundleURL))
+    }
+
+    public static func currentLocale() -> Locale {
+        let keys = currentPreferredLanguageKeys()
+        if let identifier = keys.first(where: { $0.isEmpty == false }) {
+            return Locale(identifier: identifier)
+        }
+        return .current
+    }
+
     public static func format(_ key: String, _ arguments: CVarArg...) -> String {
         String(format: string(forKey: key), arguments: arguments)
     }

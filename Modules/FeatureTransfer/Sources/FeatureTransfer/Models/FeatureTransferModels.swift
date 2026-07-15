@@ -805,9 +805,14 @@ struct HistoryEntry: Identifiable, Codable, Sendable {
         calendar: Calendar = .current,
         now: Date = Date()
     ) -> String {
+        let locale = FeatureTransferLocalization.currentLocale()
         if calendar.isDateInToday(date) {
             let today = FeatureTransferLocalization.string(forKey: "transfer.today")
-            return "\(today), \(date.formatted(date: .omitted, time: .shortened))"
+            let formatter = DateFormatter()
+            formatter.locale = locale
+            formatter.dateStyle = .none
+            formatter.timeStyle = .short
+            return "\(today), \(formatter.string(from: date))"
         }
         if calendar.isDateInYesterday(date) {
             return FeatureTransferLocalization.string(forKey: "transfer.yesterday")
@@ -818,9 +823,16 @@ struct HistoryEntry: Identifiable, Codable, Sendable {
             to: calendar.startOfDay(for: now)
         ).day
         if let days, days >= 0, days < 7 {
-            return date.formatted(.dateTime.weekday(.abbreviated))
+            let formatter = DateFormatter()
+            formatter.locale = locale
+            formatter.setLocalizedDateFormatFromTemplate("EEE")
+            return formatter.string(from: date)
         }
-        return date.formatted(date: .abbreviated, time: .omitted)
+        let formatter = DateFormatter()
+        formatter.locale = locale
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        return formatter.string(from: date)
     }
 }
 

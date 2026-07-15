@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="App/LocalDropApp/Assets.xcassets/AppIcon.appiconset/AppIcon-128@2x.png" alt="LocalDrop" width="128">
+  <img src="Assets/Logo/localdrop-app-icon.png" alt="LocalDrop" width="128">
 </p>
 
 <h1 align="center">LocalDrop</h1>

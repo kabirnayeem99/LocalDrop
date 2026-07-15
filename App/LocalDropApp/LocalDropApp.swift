@@ -36,11 +36,12 @@ struct LocalDropApp: App {
         _container = State(initialValue: initialContainer)
         _shouldStartInitialContainer = State(initialValue: isUITesting)
         _shouldBootstrapLiveContainer = State(initialValue: isUITesting == false)
+        initialContainer.syncLocalizationLanguage()
     }
 
     var body: some Scene {
         WindowGroup(id: "main") {
-            container.rootView(sendEntryActions: sendEntryActions)
+            container.applyingCurrentLanguageOverride(to: container.rootView(sendEntryActions: sendEntryActions))
                 .fileImporter(
                     isPresented: $isFileImporterPresented,
                     allowedContentTypes: [.item],
@@ -152,7 +153,8 @@ struct LocalDropApp: App {
         }
 
         Window(localized("app.about.title"), id: "about") {
-            AboutLocalDropView()
+            container.applyingCurrentLanguageOverride(to: AboutLocalDropView())
+                .windowTitleUpdater(localized("app.about.title"))
         }
         .defaultSize(width: 520, height: 560)
         .windowResizability(.contentSize)
@@ -281,6 +283,7 @@ struct LocalDropApp: App {
         shouldBootstrapLiveContainer = false
 
         container = await TransferFeatureContainer.liveAsync()
+        container.syncLocalizationLanguage()
         appDelegate.minimizeToMenuBarProvider = {
             MainActor.assumeIsolated { container.shouldMinimizeToMenuBar }
         }
@@ -333,32 +336,56 @@ private struct AboutLocalDropView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
 
                     VStack(alignment: .leading, spacing: 6) {
-                        Text(FeatureTransferLocalization.string(forKey: "root.localDrop"))
+                        Text(FeatureTransferLocalization.resource("root.localDrop"))
                             .font(.system(size: 28, weight: .semibold))
-                        Text(FeatureTransferLocalization.string(forKey: "app.about.tagline"))
+                        Text(FeatureTransferLocalization.resource("app.about.tagline"))
                             .foregroundStyle(.secondary)
-                        Text(FeatureTransferLocalization.string(forKey: "app.about.exclusiveMacOS"))
+                        Text(FeatureTransferLocalization.resource("app.about.exclusiveMacOS"))
                             .fontWeight(.semibold)
                     }
                 }
 
                 Group {
-                    Text(FeatureTransferLocalization.string(forKey: "app.about.description1"))
-                    Text(FeatureTransferLocalization.string(forKey: "app.about.description2"))
-                    Text(FeatureTransferLocalization.string(forKey: "app.about.description3"))
+                    Text(FeatureTransferLocalization.resource("app.about.description1"))
+                    Text(FeatureTransferLocalization.resource("app.about.description2"))
+                    Text(FeatureTransferLocalization.resource("app.about.description3"))
                 }
                 .fixedSize(horizontal: false, vertical: true)
 
                 Divider()
 
                 VStack(alignment: .leading, spacing: 10) {
-                    Link(FeatureTransferLocalization.string(forKey: "app.about.termsOfUse"), destination: termsOfUseURL)
-                    Link(FeatureTransferLocalization.string(forKey: "app.about.privacyPolicy"), destination: privacyPolicyURL)
-                    Link(FeatureTransferLocalization.string(forKey: "app.about.supportLocalSend"), destination: supportLocalSendURL)
+                    Link(destination: termsOfUseURL) { Text(FeatureTransferLocalization.resource("app.about.termsOfUse")) }
+                    Link(destination: privacyPolicyURL) { Text(FeatureTransferLocalization.resource("app.about.privacyPolicy")) }
+                    Link(destination: supportLocalSendURL) { Text(FeatureTransferLocalization.resource("app.about.supportLocalSend")) }
                 }
             }
             .padding(24)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+}
+
+private struct WindowTitleUpdater: NSViewRepresentable {
+    let title: String
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async {
+            view.window?.title = title
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async {
+            nsView.window?.title = title
+        }
+    }
+}
+
+private extension View {
+    func windowTitleUpdater(_ title: String) -> some View {
+        background(WindowTitleUpdater(title: title))
     }
 }

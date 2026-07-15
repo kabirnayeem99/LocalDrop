@@ -418,7 +418,7 @@ actor NoopTransferRuntime: TransferRuntime {
     func refreshDiscovery() async {}
     func discoveredPeers() async -> AsyncStream<[NearbyPeerItem]> { AsyncStream { $0.yield([]) } }
     func inboundRequests() async -> AsyncStream<IncomingTransferRequest> { AsyncStream { _ in } }
-    func progressEvents() async -> AsyncStream<ActiveTransferProgress> { AsyncStream { _ in } }
+    func progressEvents() async -> AsyncStream<TransferProgressEvent> { AsyncStream { _ in } }
     func updateSettings(_ settings: TransferProtocolSettings) async throws {}
     func stage(_ items: [StagedTransferItem]) async {}
     func sendStagedItems(to peerID: NearbyPeerItem.ID, pin: String?) async throws {}

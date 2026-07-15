@@ -49,6 +49,190 @@ final class FeatureTransferTests: XCTestCase {
         XCTAssertEqual(store.incomingRequest?.id, "incoming")
     }
 
+    func testProgressUpdateKeepsTransferActiveWithoutAppendingHistory() async {
+        let runtime = FakeTransferRuntime()
+        let historyPersistence = InMemoryHistoryPersistence(entries: [])
+        let store = TransferFeatureStore(
+            runtime: runtime,
+            settingsPersistence: InMemorySettingsPersistence(),
+            historyPersistence: historyPersistence,
+            loginItemManaging: FakeLoginItemManaging(),
+            snapshot: .default(
+                deviceName: "LocalDrop Test Mac",
+                saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
+            )
+        )
+
+        await store.start()
+        await runtime.emitProgress(
+            ActiveTransferProgress(
+                id: "progress-1",
+                direction: .sending,
+                counterpartName: "Peer",
+                fileName: "movie.mov",
+                progress: 0.42,
+                throughput: "42 KB",
+                etaDescription: "1 item left",
+                totalBytes: 1_000,
+                transferredBytes: 420,
+                currentFileTotalBytes: 1_000,
+                currentFileTransferredBytes: 420
+            )
+        )
+
+        await waitUntil { store.activeTransfer?.id == "progress-1" }
+
+        XCTAssertEqual(store.activeTransfer?.status, .running)
+        XCTAssertTrue(store.historyEntries.isEmpty)
+    }
+
+    func testCompletedTerminalEventAppendsHistoryOnceAndAutoDismisses() async {
+        let runtime = FakeTransferRuntime()
+        let historyPersistence = InMemoryHistoryPersistence(entries: [])
+        let store = TransferFeatureStore(
+            runtime: runtime,
+            settingsPersistence: InMemorySettingsPersistence(),
+            historyPersistence: historyPersistence,
+            loginItemManaging: FakeLoginItemManaging(),
+            snapshot: .default(
+                deviceName: "LocalDrop Test Mac",
+                saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
+            )
+        )
+
+        await store.start()
+        let progress = ActiveTransferProgress(
+            id: "done-1",
+            direction: .sending,
+            counterpartName: "Peer",
+            fileName: "report.pdf",
+            progress: 1,
+            throughput: "Saved",
+            etaDescription: "Complete",
+            byteCount: 512,
+            totalBytes: 512,
+            transferredBytes: 512,
+            currentFileTotalBytes: 512,
+            currentFileTransferredBytes: 512,
+            status: .completed
+        )
+
+        await runtime.emitTerminalProgress(progress)
+        await waitUntil { store.historyEntries.count == 1 }
+        XCTAssertEqual(store.historyEntries.first?.fileName, "report.pdf")
+        XCTAssertEqual(store.feedback?.tone, .success)
+        try? await Task.sleep(nanoseconds: 1_100_000_000)
+        XCTAssertNil(store.activeTransfer)
+    }
+
+    func testCanceledAndFailedTerminalEventsClearActiveTransferImmediately() async {
+        let runtime = FakeTransferRuntime()
+        let historyPersistence = InMemoryHistoryPersistence(entries: [])
+        let store = TransferFeatureStore(
+            runtime: runtime,
+            settingsPersistence: InMemorySettingsPersistence(),
+            historyPersistence: historyPersistence,
+            loginItemManaging: FakeLoginItemManaging(),
+            snapshot: .default(
+                deviceName: "LocalDrop Test Mac",
+                saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
+            )
+        )
+
+        await store.start()
+        await runtime.emitProgress(
+            ActiveTransferProgress(
+                id: "cancel-1",
+                direction: .sending,
+                counterpartName: "Peer",
+                fileName: "archive.zip",
+                progress: 0.2,
+                throughput: "20 KB",
+                etaDescription: "Uploading",
+                status: .running
+            )
+        )
+        await waitUntil { store.activeTransfer?.id == "cancel-1" }
+
+        await runtime.emitTerminalProgress(
+            ActiveTransferProgress(
+                id: "cancel-1",
+                direction: .sending,
+                counterpartName: "Peer",
+                fileName: "archive.zip",
+                progress: 0.2,
+                throughput: "Canceled",
+                etaDescription: "Canceled",
+                status: .canceled
+            )
+        )
+        await waitUntil { store.activeTransfer == nil }
+        XCTAssertEqual(store.feedback?.message, FeatureTransferLocalization.string(forKey: "feedback.transferCanceled"))
+
+        await runtime.emitProgress(
+            ActiveTransferProgress(
+                id: "fail-1",
+                direction: .receiving,
+                counterpartName: "Peer",
+                fileName: "archive.zip",
+                progress: 0.5,
+                throughput: "50 KB",
+                etaDescription: "Receiving",
+                status: .running
+            )
+        )
+        await waitUntil { store.activeTransfer?.id == "fail-1" }
+
+        await runtime.emitTerminalProgress(
+            ActiveTransferProgress(
+                id: "fail-1",
+                direction: .receiving,
+                counterpartName: "Peer",
+                fileName: "archive.zip",
+                progress: 0.5,
+                throughput: "Failed",
+                etaDescription: "Failed",
+                status: .failed
+            )
+        )
+        await waitUntil { store.activeTransfer == nil }
+        XCTAssertEqual(store.feedback?.message, "Transfer failed")
+        XCTAssertTrue(store.historyEntries.isEmpty)
+    }
+
+    func testProgressResetClearsStaleActiveTransferState() async {
+        let runtime = FakeTransferRuntime()
+        let historyPersistence = InMemoryHistoryPersistence(entries: [])
+        let store = TransferFeatureStore(
+            runtime: runtime,
+            settingsPersistence: InMemorySettingsPersistence(),
+            historyPersistence: historyPersistence,
+            loginItemManaging: FakeLoginItemManaging(),
+            snapshot: .default(
+                deviceName: "LocalDrop Test Mac",
+                saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
+            )
+        )
+
+        await store.start()
+        await runtime.emitProgress(
+            ActiveTransferProgress(
+                id: "reset-1",
+                direction: .sending,
+                counterpartName: "Peer",
+                fileName: "video.mp4",
+                progress: 0.6,
+                throughput: "60 KB",
+                etaDescription: "Uploading",
+                status: .running
+            )
+        )
+        await waitUntil { store.activeTransfer?.id == "reset-1" }
+
+        await runtime.emitProgressReset()
+        await waitUntil { store.activeTransfer == nil }
+    }
+
     func testPersistSettingsPushesRuntimeUpdate() async {
         let runtime = FakeTransferRuntime()
         let persistence = InMemorySettingsPersistence()
@@ -1515,7 +1699,7 @@ private struct StringCatalog: Decodable {
 private actor FakeTransferRuntime: TransferRuntime {
     private let peersBroadcaster = TestBroadcaster<[NearbyPeerItem]>(initialValue: [])
     private let incomingBroadcaster = TestBroadcaster<FeatureTransfer.IncomingTransferRequest>()
-    private let progressBroadcaster = TestBroadcaster<ActiveTransferProgress>()
+    private let progressBroadcaster = TestBroadcaster<TransferProgressEvent>()
     private(set) var lastUpdatedSettings: TransferProtocolSettings?
     private(set) var refreshDiscoveryCallCount = 0
     private(set) var stagedItems: [StagedTransferItem] = []
@@ -1529,7 +1713,7 @@ private actor FakeTransferRuntime: TransferRuntime {
     func refreshDiscovery() async { refreshDiscoveryCallCount += 1 }
     func discoveredPeers() async -> AsyncStream<[NearbyPeerItem]> { await peersBroadcaster.stream() }
     func inboundRequests() async -> AsyncStream<FeatureTransfer.IncomingTransferRequest> { await incomingBroadcaster.stream() }
-    func progressEvents() async -> AsyncStream<ActiveTransferProgress> { await progressBroadcaster.stream() }
+    func progressEvents() async -> AsyncStream<TransferProgressEvent> { await progressBroadcaster.stream() }
     func updateSettings(_ settings: TransferProtocolSettings) async throws {
         if let updateSettingsError {
             throw updateSettingsError
@@ -1550,7 +1734,15 @@ private actor FakeTransferRuntime: TransferRuntime {
     }
 
     func emitProgress(_ progress: ActiveTransferProgress) async {
-        await progressBroadcaster.yield(progress)
+        await progressBroadcaster.yield(.updated(progress))
+    }
+
+    func emitTerminalProgress(_ progress: ActiveTransferProgress) async {
+        await progressBroadcaster.yield(.terminal(progress))
+    }
+
+    func emitProgressReset() async {
+        await progressBroadcaster.yield(.reset)
     }
 }
 

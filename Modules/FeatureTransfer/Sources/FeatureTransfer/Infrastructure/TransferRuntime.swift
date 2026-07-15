@@ -1,12 +1,18 @@
 import Foundation
 
+enum TransferProgressEvent: Equatable, Sendable {
+    case updated(ActiveTransferProgress)
+    case terminal(ActiveTransferProgress)
+    case reset
+}
+
 protocol TransferRuntime: Sendable {
     func start() async throws
     func stop() async
     func refreshDiscovery() async
     func discoveredPeers() async -> AsyncStream<[NearbyPeerItem]>
     func inboundRequests() async -> AsyncStream<IncomingTransferRequest>
-    func progressEvents() async -> AsyncStream<ActiveTransferProgress>
+    func progressEvents() async -> AsyncStream<TransferProgressEvent>
     func updateSettings(_ settings: TransferProtocolSettings) async throws
     func stage(_ items: [StagedTransferItem]) async
     func sendStagedItems(to peerID: NearbyPeerItem.ID, pin: String?) async throws

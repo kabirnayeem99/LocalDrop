@@ -91,6 +91,55 @@ public actor LocalSendServer {
         await sendSession.snapshot(sessionId: sessionId)
     }
 
+    public func beginStreamingUpload(
+        sessionId: String?,
+        fileId: String?,
+        token: String?,
+        senderIP: String
+    ) async {
+        guard await receiveSession.beginUpload(
+            sessionId: sessionId,
+            fileId: fileId,
+            token: token,
+            senderIP: senderIP
+        ) else {
+            return
+        }
+        await notifyStateObserver()
+    }
+
+    public func updateStreamingUpload(
+        sessionId: String?,
+        fileId: String?,
+        senderIP: String,
+        bytesReceived: Int64
+    ) async {
+        guard await receiveSession.updateUploadProgress(
+            sessionId: sessionId,
+            fileId: fileId,
+            senderIP: senderIP,
+            bytesReceived: bytesReceived
+        ) else {
+            return
+        }
+        await notifyStateObserver()
+    }
+
+    public func failStreamingUpload(
+        sessionId: String?,
+        fileId: String?,
+        senderIP: String
+    ) async {
+        guard await receiveSession.failUpload(
+            sessionId: sessionId,
+            fileId: fileId,
+            senderIP: senderIP
+        ) else {
+            return
+        }
+        await notifyStateObserver()
+    }
+
     private func currentSharedFiles() async -> [String: LocalSharedFile] {
         if let sharedFilesProvider = configuration.sharedFilesProvider {
             return await sharedFilesProvider()

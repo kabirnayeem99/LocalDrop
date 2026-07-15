@@ -6,7 +6,11 @@ struct ClientAndSessionCoverageTests {
     actor StubTransport: LocalSendTransport {
         var requests: [HTTPRequest] = []
 
-        func send(_ request: HTTPRequest, to peer: RemotePeer) async throws -> HTTPResponse {
+        func send(
+            _ request: HTTPRequest,
+            to peer: RemotePeer,
+            progress: (@Sendable (FileTransferProgress) -> Void)?
+        ) async throws -> HTTPResponse {
             requests.append(request)
             switch request.path {
             case "\(LocalSendKit.apiPrefix)/register":
@@ -116,5 +120,48 @@ struct ClientAndSessionCoverageTests {
         _ = try await send.download(sessionId: "2.2.2.2", fileId: "d1", requesterIP: "2.2.2.2")
         #expect(await send.cancel(sessionId: "2.2.2.2", requesterIP: "2.2.2.2") == false)
         #expect(await send.snapshot(sessionId: "2.2.2.2")?.status == .finished)
+    }
+
+    @Test func receiveSessionTracksAggregateByteProgressAcrossFiles() async throws {
+        let session = ReceiveSession()
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        let request = PrepareUploadRequest(
+            info: RegisterInfo(alias: "Sender", fingerprint: "S", port: 1, protocolType: .https),
+            files: [
+                "f1": FileDto(id: "f1", fileName: "a.bin", size: 100, fileType: "application/octet-stream"),
+                "f2": FileDto(id: "f2", fileName: "b.bin", size: 300, fileType: "application/octet-stream")
+            ]
+        )
+
+        let accepted = try await session.prepare(
+            request: request,
+            senderIP: "1.1.1.1",
+            policy: .acceptAll,
+            destinationDirectory: directory,
+            sessionIdFactory: { "progress-session" },
+            tokenFactory: { "token-\($0)" }
+        )
+        let response = try #require({
+            if case .accepted(let value) = accepted { return value }
+            return nil
+        }())
+
+        #expect(await session.beginUpload(sessionId: response.sessionId, fileId: "f1", token: response.files["f1"], senderIP: "1.1.1.1"))
+        #expect(await session.updateUploadProgress(sessionId: response.sessionId, fileId: "f1", senderIP: "1.1.1.1", bytesReceived: 40))
+        let firstSnapshot = try #require(await session.snapshot())
+        #expect(firstSnapshot.status == .transferring)
+        #expect(firstSnapshot.totalBytes == 400)
+        #expect(firstSnapshot.bytesReceived == 40)
+        #expect(firstSnapshot.currentFileID == "f1")
+        #expect(firstSnapshot.currentFileBytesReceived == 40)
+
+        #expect(try await session.upload(sessionId: response.sessionId, fileId: "f1", token: response.files["f1"], senderIP: "1.1.1.1", body: Data(repeating: 0x1, count: 100)) == .success)
+        #expect(await session.beginUpload(sessionId: response.sessionId, fileId: "f2", token: response.files["f2"], senderIP: "1.1.1.1"))
+        #expect(await session.updateUploadProgress(sessionId: response.sessionId, fileId: "f2", senderIP: "1.1.1.1", bytesReceived: 120))
+        let secondSnapshot = try #require(await session.snapshot())
+        #expect(secondSnapshot.bytesReceived == 220)
+        #expect(secondSnapshot.currentFileID == "f2")
+        #expect(secondSnapshot.currentFileBytesReceived == 120)
+        #expect(secondSnapshot.currentFileTotalBytes == 300)
     }
 }

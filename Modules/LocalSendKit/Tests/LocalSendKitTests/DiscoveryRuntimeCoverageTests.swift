@@ -762,6 +762,77 @@ struct DiscoveryRuntimeCoverageTests {
         #expect(snapshot.status == .finished)
     }
 
+    @Test func urlSessionTransportReportsMonotonicUploadProgress() async throws {
+        let storeURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
+        let authority = CertificateAuthority(store: FileCertificateStore(identityURL: storeURL))
+        let identity = try authority.loadOrCreateIdentity()
+
+        let storageDirectory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        let server = LocalSendServer(
+            configuration: LocalSendServerConfiguration(
+                registerInfo: RegisterInfo(
+                    alias: "Receiver",
+                    deviceModel: "Mac",
+                    deviceType: .desktop,
+                    fingerprint: identity.fingerprint,
+                    port: nil,
+                    protocolType: .https,
+                    download: true
+                ),
+                uploadPolicy: .acceptAll,
+                storageDirectory: storageDirectory
+            )
+        )
+        let temporaryDirectory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
+
+        let runtime = LocalSendServerRuntime(
+            server: server,
+            tlsConfiguration: LocalSendTLSConfiguration(identity: identity),
+            port: 0,
+            temporaryDirectory: temporaryDirectory
+        )
+        try await runtime.start()
+        let endpoint = try await runtime.waitUntilReady()
+        defer { Task { await runtime.stop() } }
+
+        let client = LocalSendClient(
+            peer: RemotePeer(host: endpoint.host, port: endpoint.port, protocolType: endpoint.protocolType),
+            expectedFingerprint: identity.fingerprint
+        )
+        let payload = Data(repeating: 0x5A, count: 8 * 1024 * 1024)
+        let prepareRequest = PrepareUploadRequest(
+            info: RegisterInfo(alias: "Sender", fingerprint: "SENDER-FP", port: 53317, protocolType: .https),
+            files: ["f1": FileDto(id: "f1", fileName: "large.bin", size: Int64(payload.count), fileType: "application/octet-stream")]
+        )
+        let prepared = try #require(try await client.prepareUpload(prepareRequest))
+
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let fileURL = directory.appendingPathComponent("large.bin")
+        try payload.write(to: fileURL)
+
+        let samples = ProgressSamplesBox()
+        try await client.upload(
+            fileAt: fileURL,
+            byteCount: Int64(payload.count),
+            sessionId: prepared.sessionId,
+            fileId: "f1",
+            token: prepared.files["f1"]!,
+            progress: { progress in
+                Task { await samples.append(progress.bytesTransferred) }
+            }
+        )
+
+        let recorded: [Int64] = await waitFor(timeoutSeconds: 5) {
+            let values = await samples.get()
+            return values.isEmpty ? nil : values
+        } ?? []
+        #expect(recorded.isEmpty == false)
+        #expect(recorded.last == Int64(payload.count))
+        #expect(zip(recorded, recorded.dropFirst()).allSatisfy { $0 <= $1 })
+    }
+
     // MARK: - Session/TransferSessions.swift gaps
 
     @Test func receiveSessionPrepareRejectPolicyReturnsRejected() async throws {
@@ -1139,5 +1210,17 @@ private actor DataBox {
 
     func get() -> Data? {
         data
+    }
+}
+
+private actor ProgressSamplesBox {
+    private var values: [Int64] = []
+
+    func append(_ value: Int64) {
+        values.append(value)
+    }
+
+    func get() -> [Int64] {
+        values
     }
 }

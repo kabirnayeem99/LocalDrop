@@ -114,7 +114,7 @@ struct TransferMenuBarExtraView: View {
             Button(FeatureTransferLocalization.resource("general.cancel")) {
                 store.cancelActiveTransfer()
             }
-            .disabled(activeTransfer.progress >= 1)
+            .disabled(activeTransfer.status != .running)
         }
 
         if store.incomingRequest != nil {

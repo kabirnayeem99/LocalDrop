@@ -237,6 +237,13 @@ struct ActiveTransferProgress: Identifiable, Equatable, Sendable {
         case receiving
     }
 
+    enum Status: Sendable {
+        case running
+        case completed
+        case failed
+        case canceled
+    }
+
     typealias ID = String
 
     let id: ID
@@ -249,6 +256,11 @@ struct ActiveTransferProgress: Identifiable, Equatable, Sendable {
     let etaDescription: String
     let byteCount: Int64?
     let fileURL: URL?
+    let totalBytes: Int64?
+    let transferredBytes: Int64?
+    let currentFileTotalBytes: Int64?
+    let currentFileTransferredBytes: Int64?
+    let status: Status
 
     init(
         id: ID,
@@ -260,7 +272,12 @@ struct ActiveTransferProgress: Identifiable, Equatable, Sendable {
         throughput: String,
         etaDescription: String,
         byteCount: Int64? = nil,
-        fileURL: URL? = nil
+        fileURL: URL? = nil,
+        totalBytes: Int64? = nil,
+        transferredBytes: Int64? = nil,
+        currentFileTotalBytes: Int64? = nil,
+        currentFileTransferredBytes: Int64? = nil,
+        status: Status = .running
     ) {
         self.id = id
         self.direction = direction
@@ -272,6 +289,11 @@ struct ActiveTransferProgress: Identifiable, Equatable, Sendable {
         self.etaDescription = etaDescription
         self.byteCount = byteCount
         self.fileURL = fileURL
+        self.totalBytes = totalBytes
+        self.transferredBytes = transferredBytes
+        self.currentFileTotalBytes = currentFileTotalBytes
+        self.currentFileTransferredBytes = currentFileTransferredBytes
+        self.status = status
     }
 }
 

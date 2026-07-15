@@ -28,8 +28,28 @@ public enum LocalSendClientError: Error, Equatable {
     case missingPeer
 }
 
+public struct FileTransferProgress: Equatable, Sendable {
+    public var bytesTransferred: Int64
+    public var totalBytes: Int64
+
+    public init(bytesTransferred: Int64, totalBytes: Int64) {
+        self.bytesTransferred = bytesTransferred
+        self.totalBytes = totalBytes
+    }
+}
+
 public protocol LocalSendTransport: Sendable {
-    func send(_ request: HTTPRequest, to peer: RemotePeer) async throws -> HTTPResponse
+    func send(
+        _ request: HTTPRequest,
+        to peer: RemotePeer,
+        progress: (@Sendable (FileTransferProgress) -> Void)?
+    ) async throws -> HTTPResponse
+}
+
+public extension LocalSendTransport {
+    func send(_ request: HTTPRequest, to peer: RemotePeer) async throws -> HTTPResponse {
+        try await send(request, to: peer, progress: nil)
+    }
 }
 
 public struct InProcessTransport: LocalSendTransport {
@@ -39,10 +59,18 @@ public struct InProcessTransport: LocalSendTransport {
         self.handler = handler
     }
 
-    public func send(_ request: HTTPRequest, to peer: RemotePeer) async throws -> HTTPResponse {
+    public func send(
+        _ request: HTTPRequest,
+        to peer: RemotePeer,
+        progress: (@Sendable (FileTransferProgress) -> Void)?
+    ) async throws -> HTTPResponse {
         var rewritten = request
         rewritten.headers["Host"] = peer.host
-        return try await handler(rewritten)
+        let response = try await handler(rewritten)
+        if let progress, rewritten.body.byteCount > 0 {
+            progress(FileTransferProgress(bytesTransferred: rewritten.body.byteCount, totalBytes: rewritten.body.byteCount))
+        }
+        return response
     }
 }
 
@@ -136,9 +164,10 @@ public struct LocalSendClient: Sendable {
         sessionId: String,
         fileId: String,
         token: String,
-        to peer: RemotePeer? = nil
+        to peer: RemotePeer? = nil,
+        progress: (@Sendable (FileTransferProgress) -> Void)? = nil
     ) async throws {
-        try await upload(.data(data), sessionId: sessionId, fileId: fileId, token: token, to: peer)
+        try await upload(.data(data), sessionId: sessionId, fileId: fileId, token: token, to: peer, progress: progress)
     }
 
     public func upload(
@@ -147,9 +176,10 @@ public struct LocalSendClient: Sendable {
         sessionId: String,
         fileId: String,
         token: String,
-        to peer: RemotePeer? = nil
+        to peer: RemotePeer? = nil,
+        progress: (@Sendable (FileTransferProgress) -> Void)? = nil
     ) async throws {
-        try await upload(.file(fileURL, byteCount: byteCount), sessionId: sessionId, fileId: fileId, token: token, to: peer)
+        try await upload(.file(fileURL, byteCount: byteCount), sessionId: sessionId, fileId: fileId, token: token, to: peer, progress: progress)
     }
 
     public func cancel(sessionId: String, to peer: RemotePeer? = nil) async throws {
@@ -208,7 +238,8 @@ public struct LocalSendClient: Sendable {
         sessionId: String,
         fileId: String,
         token: String,
-        to peer: RemotePeer?
+        to peer: RemotePeer?,
+        progress: (@Sendable (FileTransferProgress) -> Void)?
     ) async throws {
         let peer = try resolvePeer(peer)
         let request = HTTPRequest(
@@ -225,7 +256,7 @@ public struct LocalSendClient: Sendable {
             body: body,
             remoteAddress: peer.host
         )
-        let response = try await transport.send(request, to: peer)
+        let response = try await transport.send(request, to: peer, progress: progress)
         try expectSuccess(response)
     }
 
@@ -281,8 +312,12 @@ struct URLSessionTransport: LocalSendTransport {
         self.timeoutConfiguration = timeoutConfiguration
     }
 
-    func send(_ request: HTTPRequest, to peer: RemotePeer) async throws -> HTTPResponse {
-        let delegate = TOFUSessionDelegate(expectedFingerprint: expectedFingerprint)
+    func send(
+        _ request: HTTPRequest,
+        to peer: RemotePeer,
+        progress: (@Sendable (FileTransferProgress) -> Void)?
+    ) async throws -> HTTPResponse {
+        let delegate = UploadSessionDelegate(expectedFingerprint: expectedFingerprint, progress: progress)
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = timeoutConfiguration.requestTimeout
         configuration.timeoutIntervalForResource = timeoutConfiguration.resourceTimeout
@@ -329,5 +364,38 @@ struct URLSessionTransport: LocalSendTransport {
             }
         }
         return HTTPResponse(statusCode: httpResponse.statusCode, headers: headers, body: body)
+    }
+}
+
+private final class UploadSessionDelegate: NSObject, URLSessionDelegate, URLSessionTaskDelegate, @unchecked Sendable {
+    private let tofuDelegate: TOFUSessionDelegate
+    private let progress: (@Sendable (FileTransferProgress) -> Void)?
+
+    init(
+        expectedFingerprint: String,
+        progress: (@Sendable (FileTransferProgress) -> Void)?
+    ) {
+        self.tofuDelegate = TOFUSessionDelegate(expectedFingerprint: expectedFingerprint)
+        self.progress = progress
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping @Sendable (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        tofuDelegate.urlSession(session, didReceive: challenge, completionHandler: completionHandler)
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didSendBodyData bytesSent: Int64,
+        totalBytesSent: Int64,
+        totalBytesExpectedToSend: Int64
+    ) {
+        guard let progress else { return }
+        let expected = max(totalBytesExpectedToSend, totalBytesSent)
+        progress(FileTransferProgress(bytesTransferred: totalBytesSent, totalBytes: expected))
     }
 }

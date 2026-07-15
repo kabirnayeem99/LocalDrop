@@ -160,6 +160,7 @@ final class TransferFeatureStore {
 
     func stop() async {
         cancelProgressCompletionTask()
+        activeTransfer = nil
         logger.emit(level: .info, event: "app.runtime.stop.requested", scope: "TransferFeatureStore")
         await runtime.stop()
         logger.emit(level: .info, event: "app.runtime.stop.completed", scope: "TransferFeatureStore")
@@ -360,12 +361,8 @@ final class TransferFeatureStore {
             scope: "TransferFeatureStore",
             attributes: [.string("transfer.session_id", activeTransfer.id)]
         )
-        showFeedback(
-            TransferFeedback(message: FeatureTransferLocalization.string(forKey: "feedback.transferCanceled"), symbol: "xmark.circle.fill", tone: .destructive)
-        )
         Task {
             try? await runtime.cancelActiveTransfer(activeTransfer.id)
-            self.activeTransfer = nil
         }
     }
 
@@ -556,34 +553,76 @@ final class TransferFeatureStore {
             Task { [weak self] in
                 guard let self else { return }
                 let stream = await self.runtime.progressEvents()
-                for await progress in stream {
-                    self.cancelProgressCompletionTask()
-                    self.activeTransfer = progress
-                    if progress.progress >= 1 {
-                        self.logger.emit(
-                            level: .info,
-                            event: progress.direction == .sending ? "transfer.send.completed" : "transfer.receive.completed",
-                            scope: "TransferFeatureStore",
-                            attributes: [
-                                .string("transfer.session_id", progress.id),
-                                .string("transfer.file_name", progress.fileName)
-                            ]
-                        )
-                        self.showFeedback(
-                            TransferFeedback(
-                                message: progress.direction == .sending
-                                    ? FeatureTransferLocalization.format("feedback.fileSent", progress.fileName)
-                                    : FeatureTransferLocalization.format("feedback.fileReceived", progress.fileName),
-                                symbol: "checkmark.circle.fill",
-                                tone: .success
-                            )
-                        )
-                        self.appendHistoryEntry(Self.makeCompletedHistoryEntry(from: progress))
-                        self.scheduleProgressCompletionDismiss(for: progress)
+                for await event in stream {
+                    switch event {
+                    case .updated(let progress):
+                        self.handleProgressUpdate(progress)
+                    case .terminal(let progress):
+                        self.handleProgressTerminal(progress)
+                    case .reset:
+                        self.resetActiveTransferState()
                     }
                 }
             }
         ]
+    }
+
+    private func handleProgressUpdate(_ progress: ActiveTransferProgress) {
+        cancelProgressCompletionTask()
+        activeTransfer = progress
+    }
+
+    private func handleProgressTerminal(_ progress: ActiveTransferProgress) {
+        cancelProgressCompletionTask()
+        switch progress.status {
+        case .completed:
+            activeTransfer = progress
+            logger.emit(
+                level: .info,
+                event: progress.direction == .sending ? "transfer.send.completed" : "transfer.receive.completed",
+                scope: "TransferFeatureStore",
+                attributes: [
+                    .string("transfer.session_id", progress.id),
+                    .string("transfer.file_name", progress.fileName)
+                ]
+            )
+            showFeedback(
+                TransferFeedback(
+                    message: progress.direction == .sending
+                        ? FeatureTransferLocalization.format("feedback.fileSent", progress.fileName)
+                        : FeatureTransferLocalization.format("feedback.fileReceived", progress.fileName),
+                    symbol: "checkmark.circle.fill",
+                    tone: .success
+                )
+            )
+            appendHistoryEntry(Self.makeCompletedHistoryEntry(from: progress))
+            scheduleProgressCompletionDismiss(for: progress)
+        case .canceled:
+            activeTransfer = nil
+            showFeedback(
+                TransferFeedback(
+                    message: FeatureTransferLocalization.string(forKey: "feedback.transferCanceled"),
+                    symbol: "xmark.circle.fill",
+                    tone: .destructive
+                )
+            )
+        case .failed:
+            activeTransfer = nil
+            showFeedback(
+                TransferFeedback(
+                    message: "Transfer failed",
+                    symbol: "exclamationmark.triangle.fill",
+                    tone: .destructive
+                )
+            )
+        case .running:
+            activeTransfer = progress
+        }
+    }
+
+    private func resetActiveTransferState() {
+        cancelProgressCompletionTask()
+        activeTransfer = nil
     }
 
     private func scheduleProgressCompletionDismiss(for progress: ActiveTransferProgress) {

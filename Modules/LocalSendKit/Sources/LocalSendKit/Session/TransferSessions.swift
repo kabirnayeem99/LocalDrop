@@ -5,6 +5,7 @@ public enum ReceiveSessionStatus: String, Codable, Sendable {
     case transferring
     case finished
     case canceled
+    case failed
 }
 
 public struct ReceivedFileRecord: Equatable, Sendable {
@@ -25,19 +26,34 @@ public struct ReceiveSessionSnapshot: Equatable, Sendable {
     public var senderInfo: RegisterInfo
     public var files: [String: ReceivedFileRecord]
     public var status: ReceiveSessionStatus
+    public var bytesReceived: Int64
+    public var totalBytes: Int64
+    public var currentFileID: String?
+    public var currentFileBytesReceived: Int64
+    public var currentFileTotalBytes: Int64?
 
     public init(
         sessionId: String,
         senderIP: String,
         senderInfo: RegisterInfo,
         files: [String: ReceivedFileRecord],
-        status: ReceiveSessionStatus
+        status: ReceiveSessionStatus,
+        bytesReceived: Int64 = 0,
+        totalBytes: Int64 = 0,
+        currentFileID: String? = nil,
+        currentFileBytesReceived: Int64 = 0,
+        currentFileTotalBytes: Int64? = nil
     ) {
         self.sessionId = sessionId
         self.senderIP = senderIP
         self.senderInfo = senderInfo
         self.files = files
         self.status = status
+        self.bytesReceived = bytesReceived
+        self.totalBytes = totalBytes
+        self.currentFileID = currentFileID
+        self.currentFileBytesReceived = currentFileBytesReceived
+        self.currentFileTotalBytes = currentFileTotalBytes
     }
 }
 
@@ -149,10 +165,75 @@ public actor ReceiveSession {
             senderIP: senderIP,
             senderInfo: request.info,
             files: records,
-            status: .waiting
+            status: .waiting,
+            bytesReceived: 0,
+            totalBytes: records.values.reduce(0) { $0 + $1.file.size }
         )
         current = snapshot
         return .accepted(PrepareUploadResponse(sessionId: sessionId, files: tokens))
+    }
+
+    public func beginUpload(
+        sessionId: String?,
+        fileId: String?,
+        token: String?,
+        senderIP: String
+    ) -> Bool {
+        guard let sessionId, let fileId, let token else {
+            return false
+        }
+        guard var snapshot = current else {
+            return false
+        }
+        guard snapshot.sessionId == sessionId, snapshot.senderIP == senderIP else {
+            return false
+        }
+        guard snapshot.status == .waiting || snapshot.status == .transferring else {
+            return false
+        }
+        guard let fileRecord = snapshot.files[fileId], fileRecord.token == token else {
+            return false
+        }
+
+        snapshot.status = .transferring
+        snapshot.currentFileID = fileId
+        snapshot.currentFileBytesReceived = 0
+        snapshot.currentFileTotalBytes = fileRecord.file.size
+        current = snapshot
+        return true
+    }
+
+    public func updateUploadProgress(
+        sessionId: String?,
+        fileId: String?,
+        senderIP: String,
+        bytesReceived: Int64
+    ) -> Bool {
+        guard let sessionId, let fileId else {
+            return false
+        }
+        guard var snapshot = current else {
+            return false
+        }
+        guard snapshot.sessionId == sessionId, snapshot.senderIP == senderIP else {
+            return false
+        }
+        guard snapshot.status == .waiting || snapshot.status == .transferring else {
+            return false
+        }
+        guard let fileRecord = snapshot.files[fileId] else {
+            return false
+        }
+
+        let completedBytes = completedBytesExcludingCurrentFile(in: snapshot, currentFileID: fileId)
+        let clampedCurrentBytes = max(0, min(bytesReceived, fileRecord.file.size))
+        snapshot.status = .transferring
+        snapshot.currentFileID = fileId
+        snapshot.currentFileTotalBytes = fileRecord.file.size
+        snapshot.currentFileBytesReceived = clampedCurrentBytes
+        snapshot.bytesReceived = min(snapshot.totalBytes, completedBytes + clampedCurrentBytes)
+        current = snapshot
+        return true
     }
 
     public func upload(
@@ -178,12 +259,21 @@ public actor ReceiveSession {
             return .forbidden
         }
 
+        let completedBytes = completedBytesExcludingCurrentFile(in: snapshot, currentFileID: fileId)
+        snapshot.status = .transferring
+        snapshot.currentFileID = fileId
+        snapshot.currentFileTotalBytes = fileRecord.file.size
+        snapshot.currentFileBytesReceived = fileRecord.file.size
+        snapshot.bytesReceived = min(snapshot.totalBytes, completedBytes + fileRecord.file.size)
         try Self.stage(body: body, to: fileRecord.destinationURL)
 
-        snapshot.status = .transferring
         let allExist = snapshot.files.values.allSatisfy { FileManager.default.fileExists(atPath: $0.destinationURL.path) }
         if allExist {
             snapshot.status = .finished
+            snapshot.currentFileID = nil
+            snapshot.currentFileBytesReceived = 0
+            snapshot.currentFileTotalBytes = nil
+            snapshot.bytesReceived = snapshot.totalBytes
             lastFinished = snapshot
             current = nil
         } else {
@@ -210,7 +300,7 @@ public actor ReceiveSession {
     }
 
     public func cancel(sessionId: String, senderIP: String) -> Bool {
-        guard let snapshot = current else {
+        guard var snapshot = current else {
             return false
         }
         guard snapshot.sessionId == sessionId, snapshot.senderIP == senderIP else {
@@ -219,6 +309,39 @@ public actor ReceiveSession {
         guard snapshot.status == .waiting || snapshot.status == .transferring else {
             return false
         }
+        snapshot.status = .canceled
+        snapshot.currentFileID = nil
+        snapshot.currentFileBytesReceived = 0
+        snapshot.currentFileTotalBytes = nil
+        lastFinished = snapshot
+        current = nil
+        return true
+    }
+
+    public func failUpload(
+        sessionId: String?,
+        fileId: String?,
+        senderIP: String
+    ) -> Bool {
+        guard let sessionId else {
+            return false
+        }
+        guard var snapshot = current else {
+            return false
+        }
+        guard snapshot.sessionId == sessionId, snapshot.senderIP == senderIP else {
+            return false
+        }
+        if let fileId, snapshot.currentFileID == nil {
+            snapshot.currentFileID = fileId
+        }
+        guard snapshot.status == .waiting || snapshot.status == .transferring else {
+            return false
+        }
+        snapshot.status = .failed
+        snapshot.currentFileBytesReceived = 0
+        snapshot.currentFileTotalBytes = snapshot.currentFileID.flatMap { snapshot.files[$0]?.file.size }
+        lastFinished = snapshot
         current = nil
         return true
     }
@@ -253,6 +376,18 @@ public actor ReceiveSession {
                 try FileManager.default.removeItem(at: destinationURL)
             }
             try FileManager.default.copyItem(at: sourceURL, to: destinationURL)
+        }
+    }
+
+    private func completedBytesExcludingCurrentFile(
+        in snapshot: ReceiveSessionSnapshot,
+        currentFileID: String
+    ) -> Int64 {
+        snapshot.files.reduce(into: Int64.zero) { partialResult, item in
+            guard item.key != currentFileID else { return }
+            if FileManager.default.fileExists(atPath: item.value.destinationURL.path) {
+                partialResult += item.value.file.size
+            }
         }
     }
 }

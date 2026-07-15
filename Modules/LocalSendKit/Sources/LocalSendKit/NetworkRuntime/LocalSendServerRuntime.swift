@@ -293,13 +293,36 @@ public final actor LocalSendServerRuntime {
         let requestBody: HTTPRequestBody
         let leftover: Data
         if routeIsUpload {
-            let (body, remainder) = try await stageUploadBody(
-                initialBody: initialBody,
-                expectedLength: parsedHead.contentLength,
-                on: connection
+            await server.beginStreamingUpload(
+                sessionId: parsedHead.query["sessionId"],
+                fileId: parsedHead.query["fileId"],
+                token: parsedHead.query["token"],
+                senderIP: remoteAddress
             )
-            requestBody = body
-            leftover = remainder
+            do {
+                let (body, remainder) = try await stageUploadBody(
+                    initialBody: initialBody,
+                    expectedLength: parsedHead.contentLength,
+                    on: connection,
+                    progressObserver: { [server] bytesWritten in
+                        await server.updateStreamingUpload(
+                            sessionId: parsedHead.query["sessionId"],
+                            fileId: parsedHead.query["fileId"],
+                            senderIP: remoteAddress,
+                            bytesReceived: bytesWritten
+                        )
+                    }
+                )
+                requestBody = body
+                leftover = remainder
+            } catch {
+                await server.failStreamingUpload(
+                    sessionId: parsedHead.query["sessionId"],
+                    fileId: parsedHead.query["fileId"],
+                    senderIP: remoteAddress
+                )
+                throw error
+            }
         } else {
             let (body, remainder) = try await readBufferedBody(
                 initialBody: initialBody,
@@ -350,7 +373,12 @@ public final actor LocalSendServerRuntime {
         return (Data(body.prefix(expectedLength)), leftover)
     }
 
-    private func stageUploadBody(initialBody: Data, expectedLength: Int64, on connection: NWConnection) async throws -> (body: HTTPRequestBody, leftover: Data) {
+    private func stageUploadBody(
+        initialBody: Data,
+        expectedLength: Int64,
+        on connection: NWConnection,
+        progressObserver: (@Sendable (Int64) async -> Void)? = nil
+    ) async throws -> (body: HTTPRequestBody, leftover: Data) {
         let fileURL = temporaryDirectory.appendingPathComponent(UUID().uuidString)
         FileManager.default.createFile(atPath: fileURL.path, contents: nil)
         guard let handle = try? FileHandle(forWritingTo: fileURL) else {
@@ -384,6 +412,9 @@ public final actor LocalSendServerRuntime {
 
         if initialBody.isEmpty == false {
             try write(initialBody)
+            if let progressObserver {
+                await progressObserver(bytesWritten)
+            }
         }
         while bytesWritten < expectedLength {
             let chunk = try await receive(on: connection)
@@ -391,6 +422,9 @@ public final actor LocalSendServerRuntime {
                 throw HTTPParserError.incompleteBody
             }
             try write(chunk)
+            if let progressObserver {
+                await progressObserver(bytesWritten)
+            }
         }
         guard bytesWritten == expectedLength else {
             throw HTTPParserError.incompleteBody

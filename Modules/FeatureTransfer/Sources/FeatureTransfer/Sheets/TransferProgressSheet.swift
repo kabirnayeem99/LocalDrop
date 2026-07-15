@@ -7,13 +7,21 @@ struct TransferProgressSheet: View {
 
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     @Environment(\.appReducesMotion) private var appReduceMotion
+    @State private var displayedPercent = 0
+    @State private var percentAnimationSeed = 0
     private var reduceMotion: Bool { systemReduceMotion || appReduceMotion }
 
     private var normalizedProgress: Double { min(max(progress.progress, 0), 1) }
-    private var percent: Int { Int((normalizedProgress * 100).rounded()) }
+    private var targetPercent: Int { progress.stablePercent }
+    private var displayedPercentLabel: String {
+        FeatureTransferLocalization.format("transfer.progress.percentComplete", displayedPercent)
+    }
     private var isComplete: Bool { normalizedProgress >= 1 }
     private var directionTint: Color {
         progress.direction == .sending ? SemanticColor.sending : SemanticColor.receiving
+    }
+    private var percentSpring: Animation {
+        .spring(response: 0.3, dampingFraction: 0.8)
     }
 
     // Files always flow leading -> trailing, so the leading badge is the source:
@@ -50,11 +58,19 @@ struct TransferProgressSheet: View {
                     Text(titleText)
                         .appFont(.text(.title3, .bold))
                         .foregroundStyle(.primary)
-                    Text(verbatim: "\(progress.fileName) · \(percent)% · \(progress.throughput)")
-                        .appFont(.callout)
-                        .foregroundStyle(.secondary)
-                        .monospacedStat()
-                        .contentTransition(reduceMotion ? .identity : .numericText())
+                    (
+                        Text(verbatim: "\(progress.fileName) · ")
+                            .foregroundStyle(.secondary)
+                        + Text(verbatim: "\(displayedPercent)%")
+                            .foregroundStyle(directionTint)
+                        + Text(verbatim: " · \(progress.throughput)")
+                            .foregroundStyle(.secondary)
+                    )
+                    .appFont(.callout)
+                    .monospacedStat()
+                    .scaleEffect(reduceMotion ? 1 : (percentAnimationSeed.isMultiple(of: 2) ? 1 : 1.045))
+                    .contentTransition(reduceMotion ? .identity : .numericText())
+                    .animation(reduceMotion ? nil : percentSpring, value: percentAnimationSeed)
                 }
 
                 Spacer(minLength: 0)
@@ -67,7 +83,15 @@ struct TransferProgressSheet: View {
                 .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: normalizedProgress)
 
             HStack {
-                Text(FeatureTransferLocalization.format("transfer.progress.percentComplete", percent))
+                Text(displayedPercentLabel)
+                    .foregroundStyle(directionTint)
+                    .padding(.horizontal, Spacing.xs)
+                    .padding(.vertical, 5)
+                    .background(
+                        Capsule()
+                            .fill(directionTint.opacity(reduceMotion ? 0.1 : 0.14))
+                    )
+                    .scaleEffect(reduceMotion ? 1 : (percentAnimationSeed.isMultiple(of: 2) ? 1 : 1.06))
                 Spacer()
                 if isComplete {
                     Text(FeatureTransferLocalization.resource("transfer.progress.done"))
@@ -80,6 +104,7 @@ struct TransferProgressSheet: View {
             .monospacedStat()
             .contentTransition(reduceMotion ? .identity : .numericText())
             .padding(.top, Spacing.xs)
+            .animation(reduceMotion ? nil : percentSpring, value: percentAnimationSeed)
 
             if isComplete {
                 Label(FeatureTransferLocalization.resource("transfer.progress.complete"), systemImage: "checkmark.circle.fill")
@@ -101,6 +126,13 @@ struct TransferProgressSheet: View {
         .padding(Spacing.xl)
         .frame(width: 400)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: isComplete)
+        .task(id: progress.id) {
+            displayedPercent = progress.status == .completed ? 100 : min(progress.stablePercent, 99)
+            percentAnimationSeed = 0
+        }
+        .task(id: presentationTaskID) {
+            await animateDisplayedPercent()
+        }
     }
 
     private var titleText: String {
@@ -113,6 +145,33 @@ struct TransferProgressSheet: View {
             return isComplete
                 ? FeatureTransferLocalization.format("transfer.receivedFrom", progress.counterpartName)
                 : FeatureTransferLocalization.format("transfer.progress.receivingFrom", progress.counterpartName)
+        }
+    }
+
+    private var presentationTaskID: String {
+        "\(progress.id)-\(targetPercent)-\(progress.status)"
+    }
+
+    @MainActor
+    private func animateDisplayedPercent() async {
+        let resolvedTarget = targetPercent
+        if reduceMotion || progress.status != .running {
+            if displayedPercent != resolvedTarget {
+                displayedPercent = resolvedTarget
+                percentAnimationSeed &+= 1
+            }
+            return
+        }
+
+        while displayedPercent < resolvedTarget {
+            let remaining = resolvedTarget - displayedPercent
+            let step = remaining >= 15 ? 3 : (remaining >= 7 ? 2 : 1)
+            try? await Task.sleep(nanoseconds: 130_000_000)
+            guard !Task.isCancelled else { return }
+            withAnimation(percentSpring) {
+                displayedPercent = min(displayedPercent + step, resolvedTarget)
+                percentAnimationSeed &+= 1
+            }
         }
     }
 }

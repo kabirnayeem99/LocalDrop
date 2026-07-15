@@ -224,7 +224,7 @@ extension ActiveTransferProgress {
         let action = direction == .sending
             ? FeatureTransferLocalization.string(forKey: "transfer.progress.sending")
             : FeatureTransferLocalization.string(forKey: "transfer.progress.receiving")
-        return FeatureTransferLocalization.format("transfer.progress.menuTitleFormat", action, fileName, Int(progress * 100))
+        return FeatureTransferLocalization.format("transfer.progress.menuTitleFormat", action, fileName, stablePercent)
     }
 }
 

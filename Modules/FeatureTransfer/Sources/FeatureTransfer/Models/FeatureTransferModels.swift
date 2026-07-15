@@ -297,6 +297,15 @@ struct ActiveTransferProgress: Identifiable, Equatable, Sendable {
     }
 }
 
+extension ActiveTransferProgress {
+    var stablePercent: Int {
+        if status == .completed {
+            return 100
+        }
+        return min(max(Int((progress * 100).rounded(.down)), 0), 99)
+    }
+}
+
 enum TransferDirection: String, Equatable, Codable, Sendable {
     case sent
     case received

@@ -555,7 +555,7 @@ final class TransferFeatureStore {
     }
 
     @discardableResult
-    func generateRandomDeviceNameAlias(generator: () -> String = LocalDeviceIdentity.randomAlias) -> String {
+    func generateRandomDeviceNameAlias(generator: () -> String = { LocalDeviceIdentity.randomAlias() }) -> String {
         applyResolvedDeviceName(generator())
     }
 

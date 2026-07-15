@@ -729,6 +729,44 @@ final class FeatureTransferTests: XCTestCase {
         XCTAssertTrue(persistence.savedSnapshots.isEmpty)
     }
 
+    func testRetroDeviceNameGeneratorProducesRetroNameAndThreeDigitNumber() {
+        let name = RetroDeviceNameGenerator.generate()
+        let parts = name.split(separator: " ")
+        let suffix = String(parts.suffix(1).joined())
+        let prefix = String(parts.dropLast().joined(separator: " "))
+
+        XCTAssertEqual(suffix.count, 3)
+        XCTAssertNotNil(Int(suffix))
+        XCTAssertTrue([
+            "Midnight Macintosh",
+            "Signal Macintosh",
+            "Blue Box Macintosh",
+            "Wiretap Macintosh",
+            "Carbon Terminal",
+            "Phosphor Terminal",
+            "Basement Terminal",
+            "Amber Console",
+            "Neon Mainframe",
+            "Cipher System"
+        ].contains(prefix))
+    }
+
+    func testRetroDeviceNameGeneratorSkipsExcludedDuplicate() {
+        var generator = PredictableRandomNumberGenerator(values: [
+            0, 0, 0, 0, 0,
+            1, 51, 0, 1
+        ])
+        let excluded = "Midnight Macintosh 232"
+
+        let name = RetroDeviceNameGenerator.generate(
+            excluding: [excluded],
+            using: &generator
+        )
+
+        XCTAssertNotEqual(name, excluded)
+        XCTAssertEqual(name.split(separator: " ").last?.count, 3)
+    }
+
     func testUseSystemDeviceNamePersistsResolvedName() async {
         let runtime = FakeTransferRuntime()
         let persistence = InMemorySettingsPersistence()
@@ -2036,6 +2074,22 @@ private struct StringCatalog: Decodable {
     }
 
     let strings: [String: Entry]
+}
+
+private struct PredictableRandomNumberGenerator: RandomNumberGenerator {
+    private var values: [UInt64]
+    private var index = 0
+
+    init(values: [UInt64]) {
+        self.values = values
+    }
+
+    mutating func next() -> UInt64 {
+        guard values.isEmpty == false else { return 0 }
+        let value = values[min(index, values.count - 1)]
+        index += 1
+        return value
+    }
 }
 
 private actor FakeTransferRuntime: TransferRuntime {

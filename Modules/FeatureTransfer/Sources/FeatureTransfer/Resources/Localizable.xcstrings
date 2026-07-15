@@ -2958,25 +2958,25 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Starting LocalDrop runtime…"
+            "value": "Starting…"
           }
         },
         "ar": {
           "stringUnit": {
             "state": "translated",
-            "value": "جارٍ بدء بيئة تشغيل LocalDrop…"
+            "value": "جارٍ البدء…"
           }
         },
         "id": {
           "stringUnit": {
             "state": "translated",
-            "value": "Memulai runtime LocalDrop…"
+            "value": "Memulai…"
           }
         },
         "ur": {
           "stringUnit": {
             "state": "translated",
-            "value": "LocalDrop رن ٹائم شروع ہو رہا ہے…"
+            "value": "شروع ہو رہا ہے…"
           }
         }
       }
@@ -5243,6 +5243,64 @@
         }
       }
     },
+    "transfer.progress.currentFile": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Current file"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "الملف الحالي"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File saat ini"
+          }
+        },
+        "ur": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "موجودہ فائل"
+          }
+        }
+      }
+    },
+    "transfer.progress.filePositionFormat": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File %d of %d"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "الملف %d من %d"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File %d dari %d"
+          }
+        },
+        "ur": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "فائل %d از %d"
+          }
+        }
+      }
+    },
     "transfer.progress.menuTitleFormat": {
       "extractionState": "manual",
       "localizations": {
@@ -5268,6 +5326,35 @@
           "stringUnit": {
             "state": "translated",
             "value": "%@ %@ %d%%"
+          }
+        }
+      }
+    },
+    "transfer.progress.overall": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Overall progress"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "التقدم الكلي"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Progres keseluruhan"
+          }
+        },
+        "ur": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "مجموعی پیش رفت"
           }
         }
       }

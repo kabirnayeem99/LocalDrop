@@ -25,6 +25,7 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
     private var lastReceiveStatusKey: String?
     private var emittedReceivedFileKeys: Set<String> = []
     private var emittedReceivedFileKeysSessionID: String?
+    private var startupAnnouncementTask: Task<Void, Never>?
 
     init(
         components: LiveRuntimeComponents,
@@ -49,7 +50,28 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
         try await components.node.start()
         logger.emit(level: .debug, event: "app.runtime.start.succeeded", scope: "LocalSendRuntimeAdapter", context: runtimeContext(), attributes: [.string("event.action", "node_started")])
         bindNodeObservers()
-        try await components.node.announce()
+        let startupContext = runtimeContext()
+        startupAnnouncementTask?.cancel()
+        startupAnnouncementTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.components.node.announce()
+            } catch is CancellationError {
+                return
+            } catch {
+                self.logger.emit(
+                    level: .warning,
+                    event: "discovery.announce.failed",
+                    scope: "LocalSendRuntimeAdapter",
+                    context: startupContext,
+                    attributes: [
+                        .string("event.action", "startup"),
+                        .string("error.message", error.localizedDescription),
+                        .string("error.type", String(describing: type(of: error)))
+                    ]
+                )
+            }
+        }
         logger.emit(
             level: .info,
             event: "app.runtime.start.succeeded",
@@ -60,6 +82,8 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
     }
 
     func stop() async {
+        startupAnnouncementTask?.cancel()
+        startupAnnouncementTask = nil
         stateObservationTask?.cancel()
         incomingObservationTask?.cancel()
         logger.emit(level: .debug, event: "app.runtime.stop.requested", scope: "LocalSendRuntimeAdapter", context: runtimeContext(), attributes: [.string("event.action", "stream_teardown")])
@@ -198,6 +222,12 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
                 byteCount: stagedItems.first?.byteCount,
                 totalBytes: stagedItems.compactMap(\.byteCount).reduce(0, +),
                 transferredBytes: 0,
+                fileProgress: Self.makeFailedSendFileProgressRows(
+                    stagedItems: stagedItems,
+                    failedFileID: stagedItems.first?.id
+                ),
+                totalItemCount: max(stagedItems.count, 1),
+                currentItemIndex: 1,
                 currentFileTransferredBytes: 0,
                 currentFileTotalBytes: stagedItems.first?.byteCount,
                 status: .failed
@@ -246,6 +276,7 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
         let acceptedItems = stagedItems
             .filter { prepareResponse.files[$0.id] != nil }
             .map { SendBatchItem(item: $0, byteCount: resolvedByteCount(for: $0)) }
+        let totalItemCount = max(acceptedItems.count, 1)
         let totalBatchBytes = max(acceptedItems.reduce(Int64.zero) { $0 + $1.byteCount }, 1)
         var bytesTransferredBeforeCurrentFile: Int64 = 0
 
@@ -253,6 +284,7 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
             let item = acceptedItem.item
             let byteCount = acceptedItem.byteCount
             let transferredBeforeCurrentFile = bytesTransferredBeforeCurrentFile
+            let currentItemIndex = index + 1
             guard let token = prepareResponse.files[item.id] else {
                 continue
             }
@@ -265,6 +297,15 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
                 byteCount: byteCount,
                 totalBytes: totalBatchBytes,
                 transferredBytes: bytesTransferredBeforeCurrentFile,
+                fileProgress: Self.makeSendFileProgressRows(
+                    batchItems: acceptedItems,
+                    currentItemIndex: currentItemIndex,
+                    currentFileTransferredBytes: 0,
+                    currentFileTotalBytes: byteCount,
+                    currentStatus: .running
+                ),
+                totalItemCount: totalItemCount,
+                currentItemIndex: currentItemIndex,
                 currentFileTransferredBytes: 0,
                 currentFileTotalBytes: byteCount,
                 throughput: FeatureTransferLocalization.string(forKey: "transfer.status.preparing"),
@@ -299,6 +340,15 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
                                 byteCount: byteCount,
                                 totalBytes: totalBatchBytes,
                                 transferredBytes: min(totalBatchBytes, transferredBeforeCurrentFile + progress.bytesTransferred),
+                                fileProgress: Self.makeSendFileProgressRows(
+                                    batchItems: acceptedItems,
+                                    currentItemIndex: currentItemIndex,
+                                    currentFileTransferredBytes: progress.bytesTransferred,
+                                    currentFileTotalBytes: progress.totalBytes,
+                                    currentStatus: .running
+                                ),
+                                totalItemCount: totalItemCount,
+                                currentItemIndex: currentItemIndex,
                                 currentFileTransferredBytes: progress.bytesTransferred,
                                 currentFileTotalBytes: progress.totalBytes,
                                 throughput: ByteCountFormatter.string(fromByteCount: progress.bytesTransferred, countStyle: .file),
@@ -316,6 +366,15 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
                     byteCount: byteCount,
                     totalBytes: totalBatchBytes,
                     transferredBytes: bytesTransferredBeforeCurrentFile,
+                    fileProgress: Self.makeSendFileProgressRows(
+                        batchItems: acceptedItems,
+                        currentItemIndex: currentItemIndex,
+                        currentFileTransferredBytes: 0,
+                        currentFileTotalBytes: byteCount,
+                        currentStatus: .failed
+                    ),
+                    totalItemCount: totalItemCount,
+                    currentItemIndex: currentItemIndex,
                     currentFileTransferredBytes: 0,
                     currentFileTotalBytes: byteCount,
                     status: .failed
@@ -358,6 +417,15 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
                     byteCount: byteCount,
                     totalBytes: totalBatchBytes,
                     transferredBytes: bytesTransferredBeforeCurrentFile,
+                    fileProgress: Self.makeSendFileProgressRows(
+                        batchItems: acceptedItems,
+                        currentItemIndex: currentItemIndex,
+                        currentFileTransferredBytes: byteCount,
+                        currentFileTotalBytes: byteCount,
+                        currentStatus: .completed
+                    ),
+                    totalItemCount: totalItemCount,
+                    currentItemIndex: currentItemIndex,
                     currentFileTransferredBytes: byteCount,
                     currentFileTotalBytes: byteCount,
                     status: .completed
@@ -371,6 +439,15 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
                     byteCount: byteCount,
                     totalBytes: totalBatchBytes,
                     transferredBytes: bytesTransferredBeforeCurrentFile,
+                    fileProgress: Self.makeSendFileProgressRows(
+                        batchItems: acceptedItems,
+                        currentItemIndex: currentItemIndex,
+                        currentFileTransferredBytes: byteCount,
+                        currentFileTotalBytes: byteCount,
+                        currentStatus: .completed
+                    ),
+                    totalItemCount: totalItemCount,
+                    currentItemIndex: currentItemIndex,
                     currentFileTransferredBytes: byteCount,
                     currentFileTotalBytes: byteCount,
                     throughput: byteCount > 0 ? ByteCountFormatter.string(fromByteCount: byteCount, countStyle: .file) : FeatureTransferLocalization.string(forKey: "transfer.status.uploaded"),
@@ -423,6 +500,12 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
                 byteCount: stagedItems.first?.byteCount,
                 totalBytes: stagedItems.compactMap(\.byteCount).reduce(0, +),
                 transferredBytes: 0,
+                fileProgress: Self.makeCanceledSendFileProgressRows(
+                    stagedItems: stagedItems,
+                    canceledFileID: stagedItems.first?.id
+                ),
+                totalItemCount: max(stagedItems.count, 1),
+                currentItemIndex: 1,
                 currentFileTransferredBytes: 0,
                 currentFileTotalBytes: stagedItems.first?.byteCount,
                 status: .canceled
@@ -641,6 +724,17 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
             fileURL: leadRecord.destinationURL,
             totalBytes: totalBytes > 0 ? totalBytes : nil,
             transferredBytes: transferredBytes > 0 ? transferredBytes : nil,
+            fileProgress: [
+                TransferFileProgress(
+                    id: leadRecord.file.id,
+                    fileName: leadRecord.file.fileName,
+                    totalBytes: currentFileTotalBytes > 0 ? currentFileTotalBytes : nil,
+                    transferredBytes: currentFileTransferredBytes > 0 ? currentFileTransferredBytes : nil,
+                    status: Self.receiveFileProgressStatus(for: status)
+                )
+            ],
+            totalItemCount: 1,
+            currentItemIndex: 1,
             currentFileTotalBytes: currentFileTotalBytes > 0 ? currentFileTotalBytes : nil,
             currentFileTransferredBytes: currentFileTransferredBytes > 0 ? currentFileTransferredBytes : nil,
             status: status
@@ -672,6 +766,17 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
                     fileURL: record.destinationURL,
                     totalBytes: totalBytes > 0 ? totalBytes : nil,
                     transferredBytes: totalBytes > 0 ? totalBytes : nil,
+                    fileProgress: [
+                        TransferFileProgress(
+                            id: record.file.id,
+                            fileName: record.file.fileName,
+                            totalBytes: record.file.size,
+                            transferredBytes: record.file.size,
+                            status: .completed
+                        )
+                    ],
+                    totalItemCount: 1,
+                    currentItemIndex: 1,
                     currentFileTotalBytes: record.file.size,
                     currentFileTransferredBytes: record.file.size,
                     status: .completed
@@ -693,6 +798,9 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
         byteCount: Int64?,
         totalBytes: Int64,
         transferredBytes: Int64,
+        fileProgress: [TransferFileProgress],
+        totalItemCount: Int,
+        currentItemIndex: Int,
         currentFileTransferredBytes: Int64,
         currentFileTotalBytes: Int64?,
         throughput: String,
@@ -715,6 +823,9 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
                     fileURL: fileURL,
                     totalBytes: clampedTotalBytes,
                     transferredBytes: clampedTransferredBytes,
+                    fileProgress: fileProgress,
+                    totalItemCount: totalItemCount,
+                    currentItemIndex: currentItemIndex,
                     currentFileTotalBytes: currentFileTotalBytes,
                     currentFileTransferredBytes: currentFileTransferredBytes,
                     status: .running
@@ -731,6 +842,9 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
         byteCount: Int64?,
         totalBytes: Int64,
         transferredBytes: Int64,
+        fileProgress: [TransferFileProgress],
+        totalItemCount: Int,
+        currentItemIndex: Int,
         currentFileTransferredBytes: Int64,
         currentFileTotalBytes: Int64?,
         status: ActiveTransferProgress.Status
@@ -769,6 +883,9 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
                     fileURL: fileURL,
                     totalBytes: clampedTotalBytes,
                     transferredBytes: clampedTransferredBytes,
+                    fileProgress: fileProgress,
+                    totalItemCount: totalItemCount,
+                    currentItemIndex: currentItemIndex,
                     currentFileTotalBytes: currentFileTotalBytes,
                     currentFileTransferredBytes: currentFileTransferredBytes,
                     status: status
@@ -787,6 +904,78 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
         return receiveSession.files.values
             .sorted { $0.file.fileName < $1.file.fileName }
             .first { FileManager.default.fileExists(atPath: $0.destinationURL.path) == false }
+    }
+
+    private static func makeSendFileProgressRows(
+        batchItems: [SendBatchItem],
+        currentItemIndex: Int,
+        currentFileTransferredBytes: Int64,
+        currentFileTotalBytes: Int64?,
+        currentStatus: TransferFileProgress.Status
+    ) -> [TransferFileProgress] {
+        batchItems.enumerated().map { index, batchItem in
+            let itemIndex = index + 1
+            let status: TransferFileProgress.Status
+            let transferredBytes: Int64?
+
+            if itemIndex < currentItemIndex {
+                status = .completed
+                transferredBytes = batchItem.byteCount
+            } else if itemIndex == currentItemIndex {
+                status = currentStatus
+                transferredBytes = currentStatus == .pending ? 0 : currentFileTransferredBytes
+            } else {
+                status = .pending
+                transferredBytes = 0
+            }
+
+            let resolvedTotalBytes: Int64?
+            if currentItemIndex == itemIndex,
+               let currentFileTotalBytes,
+               currentFileTotalBytes > 0 {
+                resolvedTotalBytes = currentFileTotalBytes
+            } else {
+                resolvedTotalBytes = batchItem.byteCount
+            }
+
+            return TransferFileProgress(
+                id: batchItem.item.id,
+                fileName: batchItem.item.name,
+                totalBytes: resolvedTotalBytes,
+                transferredBytes: transferredBytes,
+                status: status
+            )
+        }
+    }
+
+    private static func makeFailedSendFileProgressRows(
+        stagedItems: [StagedTransferItem],
+        failedFileID: String?
+    ) -> [TransferFileProgress] {
+        stagedItems.map { item in
+            TransferFileProgress(
+                id: item.id,
+                fileName: item.name,
+                totalBytes: item.byteCount,
+                transferredBytes: 0,
+                status: item.id == failedFileID ? .failed : .pending
+            )
+        }
+    }
+
+    private static func makeCanceledSendFileProgressRows(
+        stagedItems: [StagedTransferItem],
+        canceledFileID: String?
+    ) -> [TransferFileProgress] {
+        stagedItems.map { item in
+            TransferFileProgress(
+                id: item.id,
+                fileName: item.name,
+                totalBytes: item.byteCount,
+                transferredBytes: 0,
+                status: item.id == canceledFileID ? .canceled : .pending
+            )
+        }
     }
 
     private func receiveProgressValue(for receiveSession: ReceiveSessionSnapshot) -> Double {
@@ -812,6 +1001,19 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
             return .canceled
         case .failed:
             return .failed
+        }
+    }
+
+    private static func receiveFileProgressStatus(for status: ActiveTransferProgress.Status) -> TransferFileProgress.Status {
+        switch status {
+        case .running:
+            return .running
+        case .completed:
+            return .completed
+        case .failed:
+            return .failed
+        case .canceled:
+            return .canceled
         }
     }
 

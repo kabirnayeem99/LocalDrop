@@ -1,8 +1,209 @@
-- remove support for custom fonts, it creates more problem then solving.
-- use new accent color on selection in sidebar.
-- remove support for multitab.
-- file sending works, but file sending progress doesn't work fine.
-- PIN menu in settings should be multi line.
-- add GIF video on GitHub.
--file progress has issues.
+LocalDrop TODO
 
+1. Transfer progress UX and logic
+Status: confirmed issue, possible
+
+Problem
+- Sending works, but the progress presentation is still too coarse.
+- Current UI shows one active `ActiveTransferProgress` sheet at a time, centered around the current file, not a full batch view.
+- This creates the impression that file progress is inconsistent when sending multiple files.
+
+Current code logic
+- Runtime contract only emits a single stream item at a time via `TransferRuntime.progressEvents()`.
+- `LocalSendRuntimeAdapter` builds batch progress in sequence inside `sendStagedItems(to:pin:)`.
+- The adapter already calculates both aggregate and per-file values:
+  - `totalBytes`
+  - `transferredBytes`
+  - `currentFileTotalBytes`
+  - `currentFileTransferredBytes`
+- `TransferFeatureStore` stores only one `activeTransfer`.
+- `TransferProgressSheet` renders one progress bar from `progress.progress`.
+
+Affected areas
+- `Modules/FeatureTransfer/Sources/FeatureTransfer/Infrastructure/TransferRuntime.swift`
+- `Modules/FeatureTransfer/Sources/FeatureTransfer/Infrastructure/LocalSendRuntimeAdapter.swift`
+- `Modules/FeatureTransfer/Sources/FeatureTransfer/Models/FeatureTransferModels.swift`
+- `Modules/FeatureTransfer/Sources/FeatureTransfer/Application/TransferFeatureStore.swift`
+- `Modules/FeatureTransfer/Sources/FeatureTransfer/Sheets/TransferProgressSheet.swift`
+- `Modules/FeatureTransfer/Sources/FeatureTransfer/MenuBarExtraView.swift`
+
+What is possible now
+- Show 2 progress sections in the existing sheet:
+  - overall batch progress from `transferredBytes / totalBytes`
+  - current file progress from `currentFileTransferredBytes / currentFileTotalBytes`
+- Keep one active sheet, but make it visually match LocalDrop better.
+- Show "file X of Y" and remaining item count during a batch.
+
+What is not possible cleanly without model changes
+- A true LocalDrop-style per-file progress list for the whole batch.
+- Persisting completed progress rows while the next file continues.
+- Independent per-file rows in menu bar / history during a live batch.
+
+Needed if we want full parity
+- Extend `ActiveTransferProgress` or introduce a batch progress model with:
+  - total file count
+  - current file index
+  - per-file progress snapshots
+  - completed file rows
+- Update store and UI to render batch state instead of a single active item.
+
+Recommended next step
+- Implement dual-progress UI first.
+- If that still feels insufficient, follow with a batch progress model refactor.
+
+Implementation plan
+- Keep the existing single active-transfer flow in place for this pass:
+  - `TransferRuntime.progressEvents()` stays as a single-event stream.
+  - `TransferFeatureStore.activeTransfer` stays a single value.
+  - No attempt to build a persistent per-file batch timeline yet.
+- Extend `ActiveTransferProgress` just enough to support batch-aware copy:
+  - add `totalItemCount`
+  - add `currentItemIndex`
+  - add derived helpers for `overallProgress`, `currentFileProgress`, and safe batch labels
+  - keep the type backward-compatible for receive flows by defaulting to `1 of 1`
+- Update `LocalSendRuntimeAdapter.sendStagedItems(to:pin:)` to emit richer batch metadata on every send progress event:
+  - populate `totalItemCount` from the accepted staged item count
+  - populate `currentItemIndex` from the current send loop index
+  - keep `totalBytes`, `transferredBytes`, `currentFileTotalBytes`, and `currentFileTransferredBytes` authoritative
+  - preserve current failure/cancel/completion behavior and terminal events
+- Update receive-side progress emission conservatively:
+  - keep receive behavior as a single-file presentation unless the runtime already knows the batch position
+  - emit `totalItemCount = 1` and `currentItemIndex = 1` when no better receive metadata exists
+- Refactor `TransferProgressSheet` into a dual-progress sheet:
+  - section 1: overall batch progress bar and transferred/total label
+  - section 2: current file progress bar and current file byte label
+  - show `file X of Y`
+  - show remaining item count when `Y > X`
+  - keep the existing completion burst, cancel action, and completion state behavior
+- Update `MenuBarExtraView` copy only where it helps:
+  - keep one active transfer title
+  - prefer showing batch-aware wording when `totalItemCount > 1`, but do not introduce per-file menu rows
+- Test the feature at the store/runtime seam instead of relying on manual UI inspection only:
+  - add `FeatureTransferTests` coverage for batch progress updates carrying `currentItemIndex` and `totalItemCount`
+  - add coverage for terminal completion preserving the final batch metadata long enough for the success state
+  - add coverage for cancel/failure/reset still clearing `activeTransfer` correctly
+  - add coverage for menu summary text when a multi-file batch is active
+- Verification target for this pass:
+  - `swift test --package-path Modules/FeatureTransfer`
+  - `swift test --package-path Modules/LocalSendKit`
+  - if progress-related seams changed outside the package boundary, finish with `xcodebuild -project LocalDrop.xcodeproj -scheme LocalDrop build`
+
+Acceptance criteria
+- Sending multiple files shows both overall batch progress and current-file progress in the sheet.
+- The sheet clearly indicates batch position with `file X of Y`.
+- The menu bar still shows only one active transfer, but its wording no longer implies that the batch itself is only one file.
+- Cancel, failure, reset, and completed states behave exactly as they do now aside from the richer progress presentation.
+- No full batch-history or per-file live-row model is introduced in this pass.
+
+2. Duplicate / confusing progress TODOs
+Status: confirmed cleanup item
+
+Problem
+- The old notes "file sending progress doesn't work fine" and "file progress has issues" are duplicates.
+
+Action
+- Treat them as the single progress item above and do not track separately.
+
+3. PIN row in Settings should support multiline layout
+Status: confirmed issue, possible
+
+Problem
+- The incoming PIN controls are packed into one trailing `HStack` inside `LabeledContent`.
+- On smaller widths or larger localized strings, the row is likely to compress badly.
+
+Current code logic
+- `SettingsView` renders:
+  - PIN field
+  - Show / Hide button
+  - Apply button
+  - Regenerate button
+- All of these live in one horizontal row under `settings.incomingPIN`.
+
+Affected areas
+- `Modules/FeatureTransfer/Sources/FeatureTransfer/SettingsView.swift`
+- Possibly localized strings in `Modules/FeatureTransfer/Sources/FeatureTransfer/Resources/Localizable.xcstrings`
+
+What is possible
+- Convert the PIN controls to a multiline stack:
+  - row 1: PIN field + show/hide
+  - row 2: apply + regenerate
+  - row 3: validation / hint text
+- Keep current logic and validation behavior unchanged.
+
+Risk
+- Low. This is mostly layout work.
+
+Recommended next step
+- Refactor only the `incomingPIN` section layout, keep store logic unchanged.
+
+4. Sidebar selection should use the active accent color more clearly
+Status: possible, needs UI decision
+
+Problem
+- The app already sets `.tint(store.accentColor.theme.primary)` on the root view.
+- The request likely means the selected sidebar item should look more explicitly branded, not rely on the default macOS sidebar selection only.
+
+Current code logic
+- `RootView` uses `NavigationSplitView` and a sidebar `List(selection:)`.
+- `SidebarRow` currently draws icon, title, and optional badge, but does not customize the selected row appearance directly.
+
+Affected areas
+- `Modules/FeatureTransfer/Sources/FeatureTransfer/RootView.swift`
+- Possibly `Modules/DesignSystem` if a reusable selected-row style is introduced
+
+What is possible
+- Improve selected-state styling with accent-aware badge/icon treatment.
+- Add a custom background or stronger accent treatment if SwiftUI selection behavior allows it cleanly on macOS.
+
+What may not be worth doing
+- Fighting the native macOS sidebar selection system too aggressively.
+- Fully custom list-row selection if it causes accessibility or focus regressions.
+
+Recommended next step
+- Try a minimal accent-aware selected-state refinement first, not a full custom sidebar rewrite.
+
+5. Remove support for custom fonts
+Status: not applicable based on current code
+
+Why
+- The current design system already uses system fonts only.
+- `LocalizedFontSupport.swift` resolves fonts via `.system(...)`.
+- I did not find active custom font registration or `Font.custom(...)` usage in the app code.
+
+Affected areas checked
+- `Modules/DesignSystem/Sources/DesignSystem/LocalizedFontSupport.swift`
+- FeatureTransfer views using `.appFont(...)`
+
+Conclusion
+- No implementation needed unless this note refers to older deleted code or another branch.
+
+6. Remove support for multitab
+Status: not applicable based on current code
+
+Why
+- Current app structure is a single `WindowGroup(id: "main")` with one `NavigationSplitView`.
+- I did not find `TabView`-based app navigation or any explicit multi-tab feature to remove.
+
+Affected areas checked
+- `App/LocalDropApp/LocalDropApp.swift`
+- `Modules/FeatureTransfer/Sources/FeatureTransfer/RootView.swift`
+
+Conclusion
+- No implementation needed unless this note means multi-window behavior, which would be a different task.
+
+7. Add GIF / demo video to GitHub
+Status: possible, non-code task
+
+Scope
+- This is documentation / repo presentation work, not app runtime work.
+
+Likely affected areas
+- `README.md`
+- `.github/`
+- Asset folder if a recording is committed
+
+Open question
+- Prefer animated GIF, MP4 in README, or both.
+
+Recommendation
+- Keep this separate from product/runtime tasks.

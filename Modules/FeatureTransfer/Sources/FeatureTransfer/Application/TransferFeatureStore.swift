@@ -141,7 +141,6 @@ final class TransferFeatureStore {
                     .string("runtime.status", runtimeStatusText)
                 ]
             )
-            await runtime.refreshDiscovery()
         } catch {
             isRuntimeAvailable = false
             setRuntimeStatus("runtime.unavailable")
@@ -596,7 +595,6 @@ final class TransferFeatureStore {
                 )
             )
             appendHistoryEntry(Self.makeCompletedHistoryEntry(from: progress))
-            scheduleProgressCompletionDismiss(for: progress)
         case .canceled:
             activeTransfer = nil
             showFeedback(
@@ -623,17 +621,6 @@ final class TransferFeatureStore {
     private func resetActiveTransferState() {
         cancelProgressCompletionTask()
         activeTransfer = nil
-    }
-
-    private func scheduleProgressCompletionDismiss(for progress: ActiveTransferProgress) {
-        progressCompletionTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 850_000_000)
-            guard !Task.isCancelled else { return }
-            if self?.activeTransfer?.id == progress.id {
-                self?.activeTransfer = nil
-                self?.progressCompletionTask = nil
-            }
-        }
     }
 
     private func cancelProgressCompletionTask() {

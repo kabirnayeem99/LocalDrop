@@ -75,6 +75,8 @@ final class FeatureTransferTests: XCTestCase {
                 etaDescription: "1 item left",
                 totalBytes: 1_000,
                 transferredBytes: 420,
+                totalItemCount: 3,
+                currentItemIndex: 2,
                 currentFileTotalBytes: 1_000,
                 currentFileTransferredBytes: 420
             )
@@ -83,7 +85,59 @@ final class FeatureTransferTests: XCTestCase {
         await waitUntil { store.activeTransfer?.id == "progress-1" }
 
         XCTAssertEqual(store.activeTransfer?.status, .running)
+        XCTAssertEqual(store.activeTransfer?.resolvedTotalItemCount, 3)
+        XCTAssertEqual(store.activeTransfer?.resolvedCurrentItemIndex, 2)
+        XCTAssertEqual(store.activeTransfer?.batchPositionLabel, "File 2 of 3")
+        XCTAssertEqual(store.activeTransfer?.remainingItemCount, 1)
         XCTAssertTrue(store.historyEntries.isEmpty)
+    }
+
+    func testActiveTransferProgressDerivesOverallAndCurrentFileBatchState() {
+        let progress = ActiveTransferProgress(
+            id: "batch-1",
+            direction: .sending,
+            counterpartName: "Peer",
+            fileName: "archive.zip",
+            progress: 0.1,
+            throughput: "42 KB",
+            etaDescription: "Soon",
+            totalBytes: 4_000,
+            transferredBytes: 1_000,
+            totalItemCount: 4,
+            currentItemIndex: 2,
+            currentFileTotalBytes: 500,
+            currentFileTransferredBytes: 250
+        )
+
+        XCTAssertEqual(progress.resolvedTotalItemCount, 4)
+        XCTAssertEqual(progress.resolvedCurrentItemIndex, 2)
+        XCTAssertEqual(progress.batchPositionLabel, "File 2 of 4")
+        XCTAssertEqual(progress.remainingItemCount, 2)
+        XCTAssertEqual(progress.stablePercent, 25)
+        XCTAssertEqual(progress.currentFileStablePercent, 50)
+        XCTAssertEqual(progress.overallProgress, 0.25, accuracy: 0.0001)
+        XCTAssertEqual(progress.currentFileProgress, 0.5, accuracy: 0.0001)
+    }
+
+    func testActiveTransferProgressFallbackFileRowUsesByteCountWhenRuntimeTotalIsZero() {
+        let progress = ActiveTransferProgress(
+            id: "batch-2",
+            direction: .sending,
+            counterpartName: "Peer",
+            fileName: "archive.zip",
+            progress: 0.1,
+            throughput: "42 KB",
+            etaDescription: "Soon",
+            byteCount: 500,
+            totalBytes: 4_000,
+            transferredBytes: 1_000,
+            currentFileTotalBytes: 0,
+            currentFileTransferredBytes: 250
+        )
+
+        let row = try? XCTUnwrap(progress.resolvedFileProgress.first)
+        XCTAssertEqual(row?.totalBytes, 500)
+        XCTAssertEqual(row?.stablePercent, 50)
     }
 
     func testCompletedTerminalEventAppendsHistoryOnceAndAutoDismisses() async {
@@ -112,6 +166,8 @@ final class FeatureTransferTests: XCTestCase {
             byteCount: 512,
             totalBytes: 512,
             transferredBytes: 512,
+            totalItemCount: 3,
+            currentItemIndex: 3,
             currentFileTotalBytes: 512,
             currentFileTransferredBytes: 512,
             status: .completed
@@ -121,8 +177,10 @@ final class FeatureTransferTests: XCTestCase {
         await waitUntil { store.historyEntries.count == 1 }
         XCTAssertEqual(store.historyEntries.first?.fileName, "report.pdf")
         XCTAssertEqual(store.feedback?.tone, .success)
+        XCTAssertEqual(store.activeTransfer?.batchPositionLabel, "File 3 of 3")
+        XCTAssertEqual(store.activeTransfer?.remainingItemCount, 0)
         try? await Task.sleep(nanoseconds: 1_100_000_000)
-        XCTAssertNil(store.activeTransfer)
+        XCTAssertEqual(store.activeTransfer?.id, "done-1")
     }
 
     func testCanceledAndFailedTerminalEventsClearActiveTransferImmediately() async {
@@ -547,14 +605,16 @@ final class FeatureTransferTests: XCTestCase {
                 fileName: "report.pdf",
                 progress: 0.42,
                 throughput: "1 MB/s",
-                etaDescription: "Soon"
+                etaDescription: "Soon",
+                totalItemCount: 3,
+                currentItemIndex: 2
             )
         )
         await store.start()
         await waitUntil { store.activeTransfer != nil }
 
         XCTAssertEqual(store.menuSummary.statusSymbol, "paperplane.fill")
-        XCTAssertEqual(store.menuSummary.activeTransferTitle, "Sending report.pdf 42%")
+        XCTAssertEqual(store.menuSummary.activeTransferTitle, "Sending File 2 of 3 · report.pdf 42%")
 
         await runtime.emitIncomingRequest(
             IncomingTransferRequest(
@@ -665,7 +725,7 @@ final class FeatureTransferTests: XCTestCase {
 
         await store.start()
         store.refreshNearbyPeers()
-        await waitUntil { await runtime.refreshDiscoveryCallCount >= 2 }
+        await waitUntil { await runtime.refreshDiscoveryCallCount == 1 }
 
         let fileURL = URL(fileURLWithPath: "/tmp/LocalDropTests/report.pdf")
         store.stageDroppedItems([fileURL])

@@ -39,16 +39,24 @@ struct RootView: View {
         .animation(store.reduceMotion ? nil : .easeOut(duration: 0.18), value: store.feedback)
         .sheet(item: presentedSheet) { sheet in
             switch sheet {
-            case .incoming(let request):
-                IncomingRequestSheet(
-                    request: request,
-                    onDecline: { store.declineIncomingRequest() },
-                    onAcceptAll: { store.acceptIncomingRequest() },
-                    onAcceptSelection: { store.acceptIncomingRequest(fileIDs: $0) }
-                )
-            case .progress(let progress):
-                TransferProgressSheet(progress: progress) {
-                    store.cancelActiveTransfer()
+            case .incoming:
+                if let request = store.incomingRequest {
+                    IncomingRequestSheet(
+                        request: request,
+                        onDecline: { store.declineIncomingRequest() },
+                        onAcceptAll: { store.acceptIncomingRequest() },
+                        onAcceptSelection: { store.acceptIncomingRequest(fileIDs: $0) }
+                    )
+                }
+            case .progress:
+                if let progress = store.activeTransfer {
+                    TransferProgressSheet(progress: progress) {
+                        if progress.status == .running {
+                            store.cancelActiveTransfer()
+                        } else {
+                            store.dismissProgress()
+                        }
+                    }
                 }
             }
         }
@@ -147,11 +155,11 @@ struct RootView: View {
     private var presentedSheet: Binding<PresentedSheet?> {
         Binding(
             get: {
-                if let request = store.incomingRequest {
-                    return .incoming(request)
+                if store.incomingRequest != nil {
+                    return .incoming
                 }
-                if let progress = store.activeTransfer {
-                    return .progress(progress)
+                if store.activeTransfer != nil {
+                    return .progress
                 }
                 return nil
             },
@@ -235,15 +243,15 @@ private struct RefreshToolbarButton: View {
 }
 
 private enum PresentedSheet: Identifiable {
-    case incoming(IncomingTransferRequest)
-    case progress(ActiveTransferProgress)
+    case incoming
+    case progress
 
     var id: String {
         switch self {
-        case .incoming(let request):
-            return "incoming-\(request.id)"
-        case .progress(let progress):
-            return "progress-\(progress.id)"
+        case .incoming:
+            return "incoming"
+        case .progress:
+            return "progress"
         }
     }
 }

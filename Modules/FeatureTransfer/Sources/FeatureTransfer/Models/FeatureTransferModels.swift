@@ -231,6 +231,38 @@ extension Collection where Element == StagedTransferItem {
     }
 }
 
+struct TransferFileProgress: Identifiable, Equatable, Sendable {
+    enum Status: Sendable {
+        case pending
+        case running
+        case completed
+        case failed
+        case canceled
+    }
+
+    let id: String
+    let fileName: String
+    let totalBytes: Int64?
+    let transferredBytes: Int64?
+    let status: Status
+
+    var progress: Double {
+        if status == .completed {
+            return 1
+        }
+        guard let totalBytes, totalBytes > 0 else { return 0 }
+        let transferred = min(max(transferredBytes ?? 0, 0), totalBytes)
+        return min(max(Double(transferred) / Double(totalBytes), 0), 1)
+    }
+
+    var stablePercent: Int {
+        if status == .completed {
+            return 100
+        }
+        return min(max(Int((progress * 100).rounded(.down)), 0), 99)
+    }
+}
+
 struct ActiveTransferProgress: Identifiable, Equatable, Sendable {
     enum Direction: Sendable {
         case sending
@@ -258,6 +290,9 @@ struct ActiveTransferProgress: Identifiable, Equatable, Sendable {
     let fileURL: URL?
     let totalBytes: Int64?
     let transferredBytes: Int64?
+    let fileProgress: [TransferFileProgress]
+    let totalItemCount: Int?
+    let currentItemIndex: Int?
     let currentFileTotalBytes: Int64?
     let currentFileTransferredBytes: Int64?
     let status: Status
@@ -275,6 +310,9 @@ struct ActiveTransferProgress: Identifiable, Equatable, Sendable {
         fileURL: URL? = nil,
         totalBytes: Int64? = nil,
         transferredBytes: Int64? = nil,
+        fileProgress: [TransferFileProgress] = [],
+        totalItemCount: Int? = nil,
+        currentItemIndex: Int? = nil,
         currentFileTotalBytes: Int64? = nil,
         currentFileTransferredBytes: Int64? = nil,
         status: Status = .running
@@ -291,6 +329,9 @@ struct ActiveTransferProgress: Identifiable, Equatable, Sendable {
         self.fileURL = fileURL
         self.totalBytes = totalBytes
         self.transferredBytes = transferredBytes
+        self.fileProgress = fileProgress
+        self.totalItemCount = totalItemCount
+        self.currentItemIndex = currentItemIndex
         self.currentFileTotalBytes = currentFileTotalBytes
         self.currentFileTransferredBytes = currentFileTransferredBytes
         self.status = status
@@ -298,11 +339,92 @@ struct ActiveTransferProgress: Identifiable, Equatable, Sendable {
 }
 
 extension ActiveTransferProgress {
+    var resolvedFileProgress: [TransferFileProgress] {
+        if fileProgress.isEmpty == false {
+            return fileProgress
+        }
+        let fallbackStatus: TransferFileProgress.Status
+        switch status {
+        case .running:
+            fallbackStatus = .running
+        case .completed:
+            fallbackStatus = .completed
+        case .failed:
+            fallbackStatus = .failed
+        case .canceled:
+            fallbackStatus = .canceled
+        }
+        return [
+            TransferFileProgress(
+                id: fileName,
+                fileName: fileName,
+                totalBytes: {
+                    if let currentFileTotalBytes, currentFileTotalBytes > 0 {
+                        return currentFileTotalBytes
+                    }
+                    return byteCount
+                }(),
+                transferredBytes: currentFileTransferredBytes ?? transferredBytes,
+                status: fallbackStatus
+            )
+        ]
+    }
+
+    var resolvedTotalItemCount: Int {
+        max(totalItemCount ?? 1, 1)
+    }
+
+    var resolvedCurrentItemIndex: Int {
+        min(max(currentItemIndex ?? 1, 1), resolvedTotalItemCount)
+    }
+
+    var overallProgress: Double {
+        if status == .completed {
+            return 1
+        }
+        if let totalBytes, totalBytes > 0 {
+            let transferred = min(max(transferredBytes ?? 0, 0), totalBytes)
+            return min(max(Double(transferred) / Double(totalBytes), 0), 1)
+        }
+        return min(max(progress, 0), 1)
+    }
+
+    var currentFileProgress: Double {
+        if status == .completed {
+            return 1
+        }
+        if let currentFileTotalBytes, currentFileTotalBytes > 0 {
+            let transferred = min(max(currentFileTransferredBytes ?? 0, 0), currentFileTotalBytes)
+            return min(max(Double(transferred) / Double(currentFileTotalBytes), 0), 1)
+        }
+        return overallProgress
+    }
+
+    var currentFileStablePercent: Int {
+        if status == .completed {
+            return 100
+        }
+        return min(max(Int((currentFileProgress * 100).rounded(.down)), 0), 99)
+    }
+
+    var remainingItemCount: Int {
+        max(resolvedTotalItemCount - resolvedCurrentItemIndex, 0)
+    }
+
+    var batchPositionLabel: String? {
+        guard resolvedTotalItemCount > 1 else { return nil }
+        return FeatureTransferLocalization.format(
+            "transfer.progress.filePositionFormat",
+            resolvedCurrentItemIndex,
+            resolvedTotalItemCount
+        )
+    }
+
     var stablePercent: Int {
         if status == .completed {
             return 100
         }
-        return min(max(Int((progress * 100).rounded(.down)), 0), 99)
+        return min(max(Int((overallProgress * 100).rounded(.down)), 0), 99)
     }
 }
 

@@ -89,7 +89,11 @@ struct TransferProgressSheet: View {
                         .foregroundStyle(directionTint)
                         .monospacedStat()
                 } else {
-                    Text(progress.status == .completed ? "Complete" : "In Progress")
+                    Text(
+                        progress.status == .completed
+                            ? FeatureTransferLocalization.resource("transfer.status.completeHeader")
+                            : FeatureTransferLocalization.resource("transfer.status.inProgressHeader")
+                    )
                         .appFont(.text(.callout, .semibold))
                         .foregroundStyle(directionTint)
                 }

@@ -130,7 +130,7 @@ struct SendView: View {
                     state: dropZoneState,
                     systemImage: "arrow.up.doc",
                     acceptedSystemImage: "checkmark.circle.fill",
-                    label: "send.dropZoneLabel"
+                    label: resolvedDropZoneLabel
                 )
                 .frame(minHeight: 80)
                 .padding(.top, Spacing.md)
@@ -186,6 +186,10 @@ struct SendView: View {
         Text(text)
             .appFont(.headline)
             .foregroundStyle(.primary)
+    }
+
+    var resolvedDropZoneLabel: String {
+        FeatureTransferLocalization.string(forKey: "send.dropZoneLabel")
     }
 
     private var stagedItemsSection: some View {

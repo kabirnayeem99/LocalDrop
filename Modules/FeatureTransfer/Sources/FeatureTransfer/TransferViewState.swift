@@ -169,6 +169,19 @@ enum LanguageSetting: String, CaseIterable, Identifiable, Codable, Sendable {
         case .system: nil
         }
     }
+
+    var localizationIdentifier: String? {
+        switch self {
+        case .english:
+            return "en"
+        default:
+            return locale?.identifier
+        }
+    }
+
+    static var supportedLocalizationIdentifiers: [String] {
+        allCases.compactMap(\.localizationIdentifier)
+    }
 }
 
 extension View {

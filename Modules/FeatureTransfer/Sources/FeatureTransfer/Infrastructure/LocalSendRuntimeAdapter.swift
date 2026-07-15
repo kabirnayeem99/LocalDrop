@@ -784,7 +784,9 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
                     state: fileState,
                     declaredTotalBytes: record.file.size > 0 ? record.file.size : nil,
                     actualTransferredBytes: transferredBytes,
-                    errorSummary: receiveSession.status == .failed && isCurrent ? "Transfer failed" : nil
+                    errorSummary: receiveSession.status == .failed && isCurrent
+                        ? FeatureTransferLocalization.string(forKey: "feedback.transferFailed")
+                        : nil
                 )
             }
 

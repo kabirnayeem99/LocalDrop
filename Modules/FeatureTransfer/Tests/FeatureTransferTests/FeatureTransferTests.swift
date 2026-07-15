@@ -1176,12 +1176,16 @@ final class FeatureTransferTests: XCTestCase {
         XCTAssertFalse(IncomingRequestSelectionState(selectedCount: 1, totalCount: 3).acceptsAll)
     }
 
-    func testTransferSecurityCopyUsesHTTPAndHTTPSTerminology() {
-        XCTAssertEqual(TransferSecurityCopy.httpsToggleTitle, "Use HTTPS for transfers")
-        XCTAssertTrue(TransferSecurityCopy.httpsToggleHelp.contains("HTTPS"))
-        XCTAssertTrue(TransferSecurityCopy.httpsToggleHelp.contains("plain HTTP"))
-        XCTAssertTrue(TransferSecurityCopy.httpsDisabledMessage.contains("plain HTTP"))
-        XCTAssertFalse(TransferSecurityCopy.httpsDisabledMessage.localizedCaseInsensitiveContains("end-to-end"))
+    func testSecurityLocalizationUsesHTTPAndHTTPSTerminology() {
+        let useHTTPS = FeatureTransferLocalization.string(forKey: "settings.useHTTPS")
+        let useHTTPSHelp = FeatureTransferLocalization.string(forKey: "settings.useHTTPSHelp")
+        let disabledMessage = FeatureTransferLocalization.string(forKey: SecurityDialog.httpsDisabled.messageKey)
+
+        XCTAssertEqual(useHTTPS, "Use HTTPS for transfers")
+        XCTAssertTrue(useHTTPSHelp.contains("HTTPS"))
+        XCTAssertTrue(useHTTPSHelp.contains("plain HTTP"))
+        XCTAssertTrue(disabledMessage.contains("plain HTTP"))
+        XCTAssertFalse(disabledMessage.localizedCaseInsensitiveContains("end-to-end"))
     }
 
     func testSettingsViewBodyBuildsWithHTTPSSetting() {
@@ -1374,6 +1378,7 @@ final class FeatureTransferTests: XCTestCase {
         _ = SendView(store: store, actions: actions).body
         store.sendMode = .link
         _ = SendView(store: store, actions: actions).body
+        _ = NSApplication.shared
         _ = RootView(store: store, sendEntryActions: actions).body
         _ = SendTextEntrySheet(initialText: "", onStage: { _ in }, onCancel: {}).body
         _ = SendTextEntrySheet(initialText: "hello", onStage: { _ in }, onCancel: {}).body
@@ -2029,21 +2034,80 @@ final class FeatureTransferTests: XCTestCase {
         XCTAssertEqual(LanguageSetting.allCases, expected)
     }
 
-    func testLocalizationCatalogHasEnglishTranslationForEveryKey() throws {
+    func testLanguageSettingLocalizationsMatchInfoPlist() throws {
+        let infoPlist = try loadInfoPlist()
+        let bundleLocalizations = try XCTUnwrap(infoPlist["CFBundleLocalizations"] as? [String])
+        XCTAssertEqual(bundleLocalizations, LanguageSetting.supportedLocalizationIdentifiers)
+    }
+
+    func testLocalizationCatalogHasEverySupportedLocaleForEveryKey() throws {
         let catalog = try loadStringCatalog()
-        let missingKeys = catalog.strings.keys.sorted().filter { key in
-            guard
-                let stringUnit = catalog.strings[key]?.localizations?["en"]?.stringUnit,
-                stringUnit.state == "translated",
-                let value = stringUnit.value?.trimmingCharacters(in: .whitespacesAndNewlines),
-                value.isEmpty == false
-            else {
-                return true
+        let requiredLocales = try requiredLocalizationIdentifiers()
+        var missing: [String] = []
+
+        for key in catalog.strings.keys.sorted() {
+            for locale in requiredLocales {
+                guard
+                    let stringUnit = catalog.strings[key]?.localizations?[locale]?.stringUnit,
+                    stringUnit.state == "translated",
+                    let value = stringUnit.value?.trimmingCharacters(in: .whitespacesAndNewlines),
+                    value.isEmpty == false
+                else {
+                    missing.append("\(key) [\(locale)]")
+                    continue
+                }
             }
-            return false
         }
 
-        XCTAssertEqual(missingKeys, [])
+        XCTAssertEqual(missing, [])
+    }
+
+    func testLocalizedFormatKeysPreservePlaceholdersAcrossSupportedLocales() throws {
+        let catalog = try loadStringCatalog()
+        let requiredLocales = try requiredLocalizationIdentifiers()
+        let keys = [
+            "device.subtitleFormat",
+            "history.subtitleFormat",
+            "incomingRequest.itemCount",
+            "incomingRequest.menuTitleFormat",
+            "incomingRequest.selectionAll",
+            "incomingRequest.selectionPartial",
+            "incomingRequest.subtitleFormat",
+            "incomingRequest.titleFormat",
+            "feedback.fileReceived",
+            "feedback.fileSent",
+            "feedback.filesAccepted",
+            "feedback.itemsStaged",
+            "menubar.receivingTitle",
+            "send.removeItem",
+            "send.stagedSubtitleFormat",
+            "transfer.completedItemFormat",
+            "transfer.progress.byteFormat",
+            "transfer.progress.etaFormat",
+            "transfer.progress.filePositionFormat",
+            "transfer.progress.menuBatchTitleFormat",
+            "transfer.progress.menuSummaryFormat",
+            "transfer.progress.menuTitleFormat",
+            "transfer.progress.percentComplete",
+            "transfer.progress.speedEtaFormat",
+            "transfer.progress.speedFormat",
+            "transfer.queuedItemFormat",
+            "transfer.stagedItems",
+            "transfer.stagedSummary"
+        ]
+
+        for key in keys {
+            let englishValue = try XCTUnwrap(catalog.strings[key]?.localizations?["en"]?.stringUnit?.value)
+            let englishPlaceholders = placeholderTokens(in: englishValue)
+            for locale in requiredLocales {
+                let localizedValue = try XCTUnwrap(catalog.strings[key]?.localizations?[locale]?.stringUnit?.value)
+                XCTAssertEqual(
+                    placeholderTokens(in: localizedValue),
+                    englishPlaceholders,
+                    "Placeholder mismatch for \(key) [\(locale)]"
+                )
+            }
+        }
     }
 
     func testLocalizationCatalogResolvesEveryKeyInEnglish() throws {
@@ -2060,7 +2124,8 @@ final class FeatureTransferTests: XCTestCase {
         result.executableURL = URL(fileURLWithPath: "/usr/bin/swift")
         result.arguments = [
             scriptURL.path,
-            stringCatalogURL.path
+            stringCatalogURL.path,
+            infoPlistURL.path
         ]
 
         let stderr = Pipe()
@@ -2072,12 +2137,150 @@ final class FeatureTransferTests: XCTestCase {
         XCTAssertEqual(result.terminationStatus, 0, errorOutput ?? "verification script failed")
     }
 
+    func testFeatureTransferLocalizationFormatsUpdatedTransferKeys() {
+        XCTAssertEqual(
+            FeatureTransferLocalization.format("transfer.progress.byteFormat", "1 MB", "2 MB"),
+            "1 MB / 2 MB"
+        )
+        XCTAssertEqual(
+            FeatureTransferLocalization.format("transfer.progress.speedFormat", "2 MB"),
+            "2 MB/s"
+        )
+        XCTAssertEqual(
+            FeatureTransferLocalization.format("transfer.progress.speedEtaFormat", "2 MB/s", "5s"),
+            "2 MB/s • ETA 5s"
+        )
+        XCTAssertEqual(
+            FeatureTransferLocalization.format("history.subtitleFormat", "Sent to", "Peer", "24 MB"),
+            "Sent to Peer · 24 MB"
+        )
+    }
+
+    func testTransferFileProgressStatusLabelUsesLocalizedKeys() {
+        XCTAssertEqual(TransferFileProgress(id: "queued", fileName: "queued.txt", status: .queued).statusLabel, "Queued")
+        XCTAssertEqual(TransferFileProgress(id: "failed", fileName: "failed.txt", status: .failed).statusLabel, "Failed")
+        XCTAssertEqual(TransferFileProgress(id: "retrying", fileName: "retrying.txt", status: .retrying).statusLabel, "Retrying")
+    }
+
+    func testTransferETADescriptionTextUsesLocalizedStrings() {
+        XCTAssertEqual(TransferETA.calculating.descriptionText, "Calculating…")
+        XCTAssertEqual(TransferETA.stalled.descriptionText, "Stalled")
+    }
+
+    func testActiveTransferProgressMenuTitleUsesLocalizedBatchFormat() {
+        let progress = ActiveTransferProgress(
+            id: "menu-1",
+            attemptID: "menu-1",
+            direction: .sending,
+            counterpartName: "Peer",
+            files: [
+                TransferFileProgress(id: "1", fileName: "one.txt", status: .completed, totalBytes: 100, effectiveTotalBytesForDisplay: 100, actualTransferredBytes: 100, displayedTransferredBytes: 100, completedBytesContribution: 100, order: 0),
+                TransferFileProgress(id: "2", fileName: "two.txt", status: .transferring, totalBytes: 100, effectiveTotalBytesForDisplay: 100, actualTransferredBytes: 50, displayedTransferredBytes: 50, order: 1),
+                TransferFileProgress(id: "3", fileName: "three.txt", status: .queued, order: 2)
+            ],
+            totalBytesKnown: 300,
+            displayableTransferredBytes: 150,
+            actualTransferredBytes: 150
+        )
+
+        XCTAssertEqual(progress.menuTitle, "Sending 1 of 3 completed 50%")
+    }
+
+    func testArabicOverrideResolvesDeviceNameAndSecurityDialogCopy() {
+        FeatureTransferLocalization.setLanguage(.arabic)
+        defer { FeatureTransferLocalization.setLocaleIdentifier(nil) }
+
+        XCTAssertEqual(
+            FeatureTransferLocalization.string(forKey: "settings.deviceNameHint"),
+            "اختر الاسم الذي ستشاهده أجهزة LocalSend الأخرى."
+        )
+        XCTAssertEqual(
+            FeatureTransferLocalization.string(forKey: SecurityDialog.requirePIN.messageKey),
+            "ستتطلب عمليات النقل الواردة رمز PIN قبل قبول الملفات."
+        )
+    }
+
+    func testSendViewResolvesDropZoneLabelText() {
+        let view = SendView(
+            store: TransferFeatureStore(
+                runtime: FakeTransferRuntime(),
+                settingsPersistence: InMemorySettingsPersistence(),
+                historyPersistence: InMemoryHistoryPersistence(),
+                loginItemManaging: FakeLoginItemManaging(),
+                snapshot: .default(
+                    deviceName: "LocalDrop Test Mac",
+                    saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
+                )
+            )
+        )
+
+        XCTAssertEqual(view.resolvedDropZoneLabel, "Drag files or folders anywhere to send")
+        XCTAssertNotEqual(view.resolvedDropZoneLabel, "send.dropZoneLabel")
+    }
+
+    func testAuditedFilesDoNotReintroduceKnownHardCodedLocalizationLiterals() throws {
+        let forbiddenByFile: [String: [String]] = [
+            "Sources/FeatureTransfer/SettingsView.swift": [
+                "\"Choose the name other LocalSend devices will see.\"",
+                "\"Enter a device name to apply.\"",
+                "\"Use system name\"",
+                "\"Generate random alias\""
+            ],
+            "Sources/FeatureTransfer/SendView.swift": [
+                "label: \"send.dropZoneLabel\""
+            ],
+            "Sources/FeatureTransfer/Sheets/TransferProgressSheet.swift": [
+                "\"Complete\"",
+                "\"In Progress\""
+            ],
+            "Sources/FeatureTransfer/Models/FeatureTransferModels.swift": [
+                "\"Calculating…\"",
+                "\"Stalled\"",
+                "\"Queued\"",
+                "\"Failed\"",
+                "\"Retrying\"",
+                "\"Completed Item \\(",
+                "\"Queued Item \\(",
+                "\" / \"",
+                "\"/s\"",
+                "\" • ETA \"",
+                "\"ETA \\(",
+                "\" · \""
+            ],
+            "Sources/FeatureTransfer/Application/TransferFeatureStore.swift": [
+                "\"Transfer failed\""
+            ],
+            "Sources/FeatureTransfer/Infrastructure/LocalSendRuntimeAdapter.swift": [
+                "\"Transfer failed\""
+            ],
+            "Sources/FeatureTransfer/MenuBarExtraView.swift": [
+                "\" completed\"",
+                "\"\\(action) · \\(itemTitle)\""
+            ]
+        ]
+
+        for (relativePath, forbiddenLiterals) in forbiddenByFile {
+            let fileURL = featureTransferRootURL.appendingPathComponent(relativePath)
+            let contents = try String(contentsOf: fileURL)
+            for literal in forbiddenLiterals {
+                XCTAssertFalse(contents.contains(literal), "Found forbidden literal \(literal) in \(relativePath)")
+            }
+        }
+    }
+
     private var stringCatalogURL: URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("Sources/FeatureTransfer/Resources/Localizable.xcstrings")
+    }
+
+    private var featureTransferRootURL: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
     }
 
     private var scriptURL: URL {
@@ -2090,9 +2293,43 @@ final class FeatureTransferTests: XCTestCase {
             .appendingPathComponent("scripts/verify-featuretransfer-localizations.swift")
     }
 
+    private var infoPlistURL: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("App/LocalDropApp/Info.plist")
+    }
+
     private func loadStringCatalog() throws -> StringCatalog {
         let data = try Data(contentsOf: stringCatalogURL)
         return try JSONDecoder().decode(StringCatalog.self, from: data)
+    }
+
+    private func loadInfoPlist() throws -> [String: Any] {
+        let data = try Data(contentsOf: infoPlistURL)
+        return try XCTUnwrap(
+            try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+        )
+    }
+
+    private func requiredLocalizationIdentifiers() throws -> [String] {
+        let bundleLocalizations = try XCTUnwrap((try loadInfoPlist())["CFBundleLocalizations"] as? [String])
+        var locales: [String] = []
+        for locale in [try loadStringCatalog().sourceLanguage] + bundleLocalizations where locales.contains(locale) == false {
+            locales.append(locale)
+        }
+        return locales
+    }
+
+    private func placeholderTokens(in value: String) -> [String] {
+        let regex = try! NSRegularExpression(pattern: #"%(?:\d+\$)?[@dDfFuUxXoOcCsSpaAeEgG]"#)
+        let nsValue = value as NSString
+        return regex.matches(in: value, range: NSRange(location: 0, length: nsValue.length)).map {
+            nsValue.substring(with: $0.range)
+        }
     }
 }
 
@@ -2110,6 +2347,7 @@ private struct StringCatalog: Decodable {
         let localizations: [String: Localization]?
     }
 
+    let sourceLanguage: String
     let strings: [String: Entry]
 }
 

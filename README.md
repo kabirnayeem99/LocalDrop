@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="Assets/Logo/localdrop-mark-color.svg" alt="LocalDrop" width="128">
+  <img src="App/LocalDropApp/Assets.xcassets/AppIcon.appiconset/AppIcon-128@2x.png" alt="LocalDrop" width="128">
 </p>
 
 <h1 align="center">LocalDrop</h1>
@@ -28,4 +28,3 @@ It is built with gratitude to the original LocalSend project and its contributor
 ## License
 
 MIT. See [LICENSE](LICENSE).
-

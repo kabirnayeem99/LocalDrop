@@ -2,19 +2,6 @@ import SwiftUI
 import DesignSystem
 import AppKit
 
-enum TransferSecurityCopy {
-    static let httpsToggleTitle = "Use HTTPS for transfers"
-    static let httpsToggleHelp = "Encrypt transfer traffic with HTTPS. Turn this off to use plain HTTP on the local network."
-    static let httpsDisabledMessage = "Transfers on this device will use plain HTTP on the local network until HTTPS is turned back on."
-}
-
-enum DeviceNameCopy {
-    static let fieldHint = "Choose the name other LocalSend devices will see."
-    static let validationMessage = "Enter a device name to apply."
-    static let useSystemName = "Use system name"
-    static let generateRandomAlias = "Generate random alias"
-}
-
 struct SettingsView: View {
     @Bindable var store: TransferFeatureStore
     @State private var saveLocationPulse = false
@@ -114,7 +101,7 @@ struct SettingsView: View {
         .alert(item: $securityDialog) { dialog in
             Alert(
                 title: Text(FeatureTransferLocalization.resource("settings.securityChanged")),
-                message: Text(dialog.message),
+                message: Text(dialog.messageResource),
                 dismissButton: .default(Text(FeatureTransferLocalization.resource("settings.ok")))
             )
         }
@@ -302,7 +289,7 @@ struct SettingsView: View {
             } label: {
                 Image(systemName: "desktopcomputer")
             }
-            .help(Text(DeviceNameCopy.useSystemName))
+            .help(Text(FeatureTransferLocalization.string(forKey: "settings.deviceNameUseSystem")))
             .accessibilityIdentifier("settings-device-name-system")
 
             Button {
@@ -310,7 +297,7 @@ struct SettingsView: View {
             } label: {
                 Image(systemName: "dice")
             }
-            .help(Text(DeviceNameCopy.generateRandomAlias))
+            .help(Text(FeatureTransferLocalization.string(forKey: "settings.deviceNameRandomAlias")))
             .accessibilityIdentifier("settings-device-name-random")
         }
         .fixedSize(horizontal: true, vertical: false)
@@ -324,7 +311,7 @@ struct SettingsView: View {
                     .appFont(.caption1)
                     .foregroundStyle(SemanticColor.pending)
             } else {
-                Text(DeviceNameCopy.fieldHint)
+                Text(FeatureTransferLocalization.string(forKey: "settings.deviceNameHint"))
                     .appFont(.caption1)
                     .foregroundStyle(.secondary)
             }
@@ -399,7 +386,7 @@ struct SettingsView: View {
 
     private func applyDeviceName() {
         guard store.updateDeviceName(deviceNameDraft) else {
-            deviceNameValidationMessage = DeviceNameCopy.validationMessage
+            deviceNameValidationMessage = FeatureTransferLocalization.string(forKey: "settings.deviceNameValidation")
             return
         }
         deviceNameDraft = store.deviceName
@@ -454,7 +441,7 @@ private struct AccentSwatchRow: View {
     }
 }
 
-private enum SecurityDialog: Identifiable {
+enum SecurityDialog: Identifiable {
     case requirePIN
     case allowDownloads
     case httpsDisabled
@@ -467,7 +454,7 @@ private enum SecurityDialog: Identifiable {
         }
     }
 
-    var message: LocalizedStringKey {
+    var messageKey: String {
         switch self {
         case .requirePIN:
             return "settings.requirePINMessage"
@@ -476,5 +463,9 @@ private enum SecurityDialog: Identifiable {
         case .httpsDisabled:
             return "settings.httpsDisabledMessage"
         }
+    }
+
+    var messageResource: LocalizedStringResource {
+        FeatureTransferLocalization.resource(.init(messageKey))
     }
 }

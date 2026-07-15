@@ -227,14 +227,18 @@ extension ActiveTransferProgress {
         let itemTitle: String
         if files.count > 1 {
             let completedCount = files.filter { $0.status == .completed }.count
-            itemTitle = "\(completedCount) of \(files.count) completed"
+            itemTitle = FeatureTransferLocalization.format(
+                "transfer.progress.menuBatchTitleFormat",
+                completedCount,
+                files.count
+            )
         } else {
             itemTitle = fileName
         }
         if hasKnownTotal {
             return FeatureTransferLocalization.format("transfer.progress.menuTitleFormat", action, itemTitle, stablePercent)
         }
-        return "\(action) · \(itemTitle)"
+        return FeatureTransferLocalization.format("transfer.progress.menuSummaryFormat", action, itemTitle)
     }
 }
 

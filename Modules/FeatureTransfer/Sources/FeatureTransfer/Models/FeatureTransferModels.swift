@@ -100,7 +100,10 @@ struct NearbyPeerItem: Identifiable, Hashable, Sendable {
                 ? FeatureTransferLocalization.string(forKey: "device.readyToReceive")
                 : FeatureTransferLocalization.string(forKey: "device.nearby")
         }
-        return parts.joined(separator: " · ")
+        if parts.count == 1 {
+            return parts[0]
+        }
+        return FeatureTransferLocalization.format("device.subtitleFormat", parts[0], parts[1])
     }
 }
 
@@ -250,9 +253,9 @@ enum TransferETA: Equatable, Sendable {
         case .none:
             return nil
         case .calculating:
-            return "Calculating…"
+            return FeatureTransferLocalization.string(forKey: "transfer.eta.calculating")
         case .stalled:
-            return "Stalled"
+            return FeatureTransferLocalization.string(forKey: "transfer.eta.stalled")
         case .estimated(let seconds):
             let formatter = DateComponentsFormatter()
             formatter.allowedUnits = seconds >= 3600 ? [.hour, .minute] : [.minute, .second]
@@ -376,23 +379,23 @@ struct TransferFileProgress: Identifiable, Equatable, Sendable {
             return transferredLabel
         }
         let totalLabel = ByteCountFormatter.string(fromByteCount: total, countStyle: .file)
-        return "\(transferredLabel) / \(totalLabel)"
+        return FeatureTransferLocalization.format("transfer.progress.byteFormat", transferredLabel, totalLabel)
     }
 
     var statusLabel: String {
         switch status {
         case .queued:
-            return "Queued"
+            return FeatureTransferLocalization.string(forKey: "transfer.status.queued")
         case .transferring:
             return FeatureTransferLocalization.string(forKey: "transfer.progress.sending")
         case .completed:
             return FeatureTransferLocalization.string(forKey: "transfer.progress.done")
         case .failed:
-            return "Failed"
+            return FeatureTransferLocalization.string(forKey: "transfer.status.failed")
         case .canceled:
             return FeatureTransferLocalization.string(forKey: "transfer.status.canceled")
         case .retrying:
-            return "Retrying"
+            return FeatureTransferLocalization.string(forKey: "transfer.status.retrying")
         }
     }
 }
@@ -536,7 +539,7 @@ struct ActiveTransferProgress: Identifiable, Equatable, Sendable {
 
                 if itemIndex < resolvedCurrentItemIndex {
                     itemStatus = .completed
-                    itemName = "Completed Item \(itemIndex)"
+                    itemName = FeatureTransferLocalization.format("transfer.completedItemFormat", itemIndex)
                     itemTotalBytes = byteCount
                     itemTransferredBytes = byteCount ?? 0
                 } else if itemIndex == resolvedCurrentItemIndex {
@@ -547,7 +550,7 @@ struct ActiveTransferProgress: Identifiable, Equatable, Sendable {
                     itemTransferredBytes = max(resolvedTransferred, 0)
                 } else {
                     itemStatus = .queued
-                    itemName = "Queued Item \(itemIndex)"
+                    itemName = FeatureTransferLocalization.format("transfer.queuedItemFormat", itemIndex)
                     itemTotalBytes = nil
                     itemTransferredBytes = 0
                 }
@@ -700,7 +703,7 @@ extension ActiveTransferProgress {
             return transferredLabel
         }
         let totalLabel = ByteCountFormatter.string(fromByteCount: totalBytesKnown, countStyle: .file)
-        return "\(transferredLabel) / \(totalLabel)"
+        return FeatureTransferLocalization.format("transfer.progress.byteFormat", transferredLabel, totalLabel)
     }
 
     var speedLabel: String? {
@@ -709,7 +712,7 @@ extension ActiveTransferProgress {
             fromByteCount: Int64(smoothedBytesPerSecond.rounded()),
             countStyle: .file
         )
-        return "\(unitsPerSecond)/s"
+        return FeatureTransferLocalization.format("transfer.progress.speedFormat", unitsPerSecond)
     }
 
     var etaLabel: String? {
@@ -719,11 +722,11 @@ extension ActiveTransferProgress {
     var secondaryStatusLine: String? {
         switch (speedLabel, etaLabel) {
         case let (.some(speed), .some(eta)):
-            return "\(speed) • ETA \(eta)"
+            return FeatureTransferLocalization.format("transfer.progress.speedEtaFormat", speed, eta)
         case let (.some(speed), nil):
             return speed
         case let (nil, .some(eta)):
-            return "ETA \(eta)"
+            return FeatureTransferLocalization.format("transfer.progress.etaFormat", eta)
         case (nil, nil):
             return nil
         }
@@ -788,7 +791,7 @@ struct HistoryEntry: Identifiable, Codable, Sendable {
         let verb = direction == .received
             ? FeatureTransferLocalization.string(forKey: "transfer.receivedFrom")
             : FeatureTransferLocalization.string(forKey: "transfer.sentTo")
-        return "\(verb) \(counterpart) · \(size)"
+        return FeatureTransferLocalization.format("history.subtitleFormat", verb, counterpart, size)
     }
 
     /// Human-readable rendering of `timestamp` for row display, e.g.

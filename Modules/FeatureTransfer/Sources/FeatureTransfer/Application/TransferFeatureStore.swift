@@ -708,7 +708,7 @@ final class TransferFeatureStore {
         case .failed:
             showFeedback(
                 TransferFeedback(
-                    message: "Transfer failed",
+                    message: FeatureTransferLocalization.string(forKey: "feedback.transferFailed"),
                     symbol: "exclamationmark.triangle.fill",
                     tone: .destructive
                 )

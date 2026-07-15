@@ -1,0 +1,8 @@
+- remove support for custom fonts, it creates more problem then solving.
+- use new accent color on selection in sidebar.
+- remove support for multitab.
+- file sending works, but file sending progress doesn't work fine.
+- PIN menu in settings should be multi line.
+- add GIF video on GitHub.
+-file progress has issues.
+

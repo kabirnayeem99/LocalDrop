@@ -279,25 +279,56 @@ public final class TransferFeatureContainer {
     ) -> LiveBootstrap {
         let bootstrapStartUptimeNanoseconds = DispatchTime.now().uptimeNanoseconds
         let baseDirectory = applicationSupportDirectory(fileManager: fileManager)
-        let logger = makeLogger(baseDirectory: baseDirectory)
-        logger.emit(level: .info, event: "app.launch.started", scope: "TransferFeatureContainer")
+        var previousStepUptimeNanoseconds = bootstrapStartUptimeNanoseconds
+        let recordBootstrapStep: (AppLogger, String) -> Void = { logger, step in
+            let now = DispatchTime.now().uptimeNanoseconds
+            logger.emit(
+                level: .info,
+                event: "app.launch.bootstrap.step",
+                scope: "TransferFeatureContainer",
+                attributes: [
+                    .string("startup.step", step),
+                    .double(
+                        "startup.step_elapsed_ms",
+                        Double(now - previousStepUptimeNanoseconds) / 1_000_000
+                    ),
+                    .double(
+                        "startup.bootstrap_elapsed_ms",
+                        Double(now - bootstrapStartUptimeNanoseconds) / 1_000_000
+                    )
+                ]
+            )
+            previousStepUptimeNanoseconds = now
+        }
         let saveLocation = defaultSaveLocation(fileManager: fileManager)
         let deviceName = Host.current().localizedName ?? "LocalDrop Mac"
+        let logger = makeLogger(baseDirectory: baseDirectory, hostName: deviceName)
+        logger.emit(level: .info, event: "app.launch.started", scope: "TransferFeatureContainer")
+        recordBootstrapStep(logger, "application_support_and_logger")
+        recordBootstrapStep(logger, "default_save_location")
+        recordBootstrapStep(logger, "host_localized_name")
         let defaultSnapshot = TransferSettingsSnapshot.default(deviceName: deviceName, saveLocation: saveLocation)
+        recordBootstrapStep(logger, "default_snapshot")
         let settingsPersistence = SettingsPersistenceAdapter(
             userDefaults: userDefaults,
             fallback: defaultSnapshot
         )
+        recordBootstrapStep(logger, "settings_persistence_init")
         var snapshot = settingsPersistence.load()
+        recordBootstrapStep(logger, "settings_load")
         let historyPersistence = HistoryPersistenceAdapter(
             directory: baseDirectory,
             fileManager: fileManager
         )
+        recordBootstrapStep(logger, "history_persistence_init")
         let loginItemManaging = SMAppServiceLoginItemManager()
+        recordBootstrapStep(logger, "login_item_manager_init")
         let actuallyLaunchesAtLogin = loginItemManaging.isRegistered
+        recordBootstrapStep(logger, "login_item_status")
         if snapshot.launchAtLogin != actuallyLaunchesAtLogin {
             snapshot.launchAtLogin = actuallyLaunchesAtLogin
             settingsPersistence.save(snapshot)
+            recordBootstrapStep(logger, "settings_save_launch_at_login")
         }
 
         logger.emit(
@@ -385,7 +416,7 @@ public final class TransferFeatureContainer {
         }
     }
 
-    private nonisolated static func makeLogger(baseDirectory: URL) -> AppLogger {
+    private nonisolated static func makeLogger(baseDirectory: URL, hostName: String) -> AppLogger {
         let launchID = UUID().uuidString.lowercased()
         let logsDirectory = baseDirectory.appendingPathComponent("Logs", isDirectory: true)
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
@@ -403,8 +434,8 @@ public final class TransferFeatureContainer {
             .string("service.namespace", "com.localdrop"),
             .string("service.version", version),
             .string("deployment.environment", environment),
-            .string("host.name", Host.current().localizedName ?? "unknown"),
-            .string("host.arch", ProcessInfo.processInfo.machineHardwareName),
+            .string("host.name", hostName),
+            .string("host.arch", ProcessInfo.processInfo.machineArchitectureName),
             .string("os.type", ProcessInfo.processInfo.operatingSystemVersionString),
             .int("process.pid", Int(ProcessInfo.processInfo.processIdentifier)),
             .string("app.launch_id", launchID)
@@ -421,14 +452,15 @@ public final class TransferFeatureContainer {
     }
 
     private nonisolated static func applicationSupportDirectory(fileManager: FileManager) -> URL {
-        let root = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? URL(fileURLWithPath: NSTemporaryDirectory())
+        let root = homeDirectoryURL(fileManager: fileManager)
+            .appendingPathComponent("Library", isDirectory: true)
+            .appendingPathComponent("Application Support", isDirectory: true)
         return root.appendingPathComponent("LocalDrop", isDirectory: true)
     }
 
     private nonisolated static func defaultSaveLocation(fileManager: FileManager) -> URL {
-        fileManager.urls(for: .downloadsDirectory, in: .userDomainMask).first
-            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Downloads", isDirectory: true)
+        homeDirectoryURL(fileManager: fileManager)
+            .appendingPathComponent("Downloads", isDirectory: true)
     }
 
     private nonisolated static func outboundTextDirectory(fileManager: FileManager) -> URL {
@@ -438,6 +470,14 @@ public final class TransferFeatureContainer {
 
     private nonisolated static func generatedTextFilename() -> String {
         "LocalDrop Text \(UUID().uuidString.lowercased()).txt"
+    }
+
+    private nonisolated static func homeDirectoryURL(fileManager: FileManager) -> URL {
+        let path = NSHomeDirectory()
+        if path.isEmpty == false {
+            return URL(fileURLWithPath: path, isDirectory: true)
+        }
+        return fileManager.homeDirectoryForCurrentUser
     }
 
     private nonisolated static func elapsedMilliseconds(since startUptimeNanoseconds: UInt64) -> Double {
@@ -492,8 +532,14 @@ private struct LiveBootstrapInput: @unchecked Sendable {
 }
 
 private extension ProcessInfo {
-    var machineHardwareName: String {
-        ProcessInfo.processInfo.environment["SIMULATOR_MODEL_IDENTIFIER"] ?? Host.current().name ?? "unknown"
+    var machineArchitectureName: String {
+        #if arch(arm64)
+        "arm64"
+        #elseif arch(x86_64)
+        "x86_64"
+        #else
+        "unknown"
+        #endif
     }
 }
 

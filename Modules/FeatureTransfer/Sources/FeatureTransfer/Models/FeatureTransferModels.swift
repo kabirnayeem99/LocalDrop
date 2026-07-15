@@ -119,6 +119,14 @@ struct IncomingTransferRequest: Identifiable, Equatable, Sendable {
     let files: [IncomingTransferFile]
 }
 
+enum SendMode: String, CaseIterable, Codable, Identifiable, Sendable {
+    case single
+    case multiple
+    case link
+
+    var id: String { rawValue }
+}
+
 enum IncomingRequestSelectionState: Equatable, Sendable {
     case none(totalCount: Int)
     case partial(selectedCount: Int, totalCount: Int)
@@ -888,6 +896,18 @@ struct TransferProtocolSettings: Codable, Equatable, Sendable {
         MemorableIncomingPINGenerator.generate()
     }
 
+    static func generateIncomingPIN(
+        prefixRoll: Int,
+        suffixValue: Int,
+        fallbackValue: Int
+    ) -> String {
+        MemorableIncomingPINGenerator.generate(
+            prefixRoll: prefixRoll,
+            suffixValue: suffixValue,
+            fallbackValue: fallbackValue
+        )
+    }
+
     static func normalizedIncomingPIN(from candidate: String?) -> String? {
         guard let candidate else { return nil }
         let digits = candidate.unicodeScalars.filter { CharacterSet.decimalDigits.contains($0) }.map(String.init).joined()
@@ -997,6 +1017,8 @@ struct TransferSettingsSnapshot: Codable, Equatable, Sendable {
     var launchAtLogin: Bool
     var reduceMotion: Bool
     var autoAcceptFavorites: Bool
+    var sendMode: SendMode
+    var shareViaLinkAutoAccept: Bool
     var protocolSettings: TransferProtocolSettings
 
     enum CodingKeys: String, CodingKey {
@@ -1008,6 +1030,8 @@ struct TransferSettingsSnapshot: Codable, Equatable, Sendable {
         case launchAtLogin
         case reduceMotion
         case autoAcceptFavorites
+        case sendMode
+        case shareViaLinkAutoAccept
         case protocolSettings
     }
 
@@ -1020,6 +1044,8 @@ struct TransferSettingsSnapshot: Codable, Equatable, Sendable {
         launchAtLogin: Bool,
         reduceMotion: Bool,
         autoAcceptFavorites: Bool,
+        sendMode: SendMode = .single,
+        shareViaLinkAutoAccept: Bool = false,
         protocolSettings: TransferProtocolSettings
     ) {
         self.quickSave = quickSave
@@ -1030,6 +1056,8 @@ struct TransferSettingsSnapshot: Codable, Equatable, Sendable {
         self.launchAtLogin = launchAtLogin
         self.reduceMotion = reduceMotion
         self.autoAcceptFavorites = autoAcceptFavorites
+        self.sendMode = sendMode
+        self.shareViaLinkAutoAccept = shareViaLinkAutoAccept
         self.protocolSettings = protocolSettings
     }
 
@@ -1043,6 +1071,8 @@ struct TransferSettingsSnapshot: Codable, Equatable, Sendable {
         launchAtLogin = try container.decode(Bool.self, forKey: .launchAtLogin)
         reduceMotion = try container.decode(Bool.self, forKey: .reduceMotion)
         autoAcceptFavorites = try container.decode(Bool.self, forKey: .autoAcceptFavorites)
+        sendMode = try container.decodeIfPresent(SendMode.self, forKey: .sendMode) ?? .single
+        shareViaLinkAutoAccept = try container.decodeIfPresent(Bool.self, forKey: .shareViaLinkAutoAccept) ?? false
         protocolSettings = try container.decode(TransferProtocolSettings.self, forKey: .protocolSettings)
     }
 
@@ -1056,6 +1086,8 @@ struct TransferSettingsSnapshot: Codable, Equatable, Sendable {
         try container.encode(launchAtLogin, forKey: .launchAtLogin)
         try container.encode(reduceMotion, forKey: .reduceMotion)
         try container.encode(autoAcceptFavorites, forKey: .autoAcceptFavorites)
+        try container.encode(sendMode, forKey: .sendMode)
+        try container.encode(shareViaLinkAutoAccept, forKey: .shareViaLinkAutoAccept)
         try container.encode(protocolSettings, forKey: .protocolSettings)
     }
 
@@ -1069,6 +1101,8 @@ struct TransferSettingsSnapshot: Codable, Equatable, Sendable {
             launchAtLogin: true,
             reduceMotion: false,
             autoAcceptFavorites: true,
+            sendMode: .single,
+            shareViaLinkAutoAccept: false,
             protocolSettings: TransferProtocolSettings(
                 deviceName: deviceName,
                 tcpPort: 53317,

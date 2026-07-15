@@ -15,6 +15,7 @@ struct SendView: View {
     @State private var dropZoneResetTask: Task<Void, Never>?
     @State private var dropZoneStateToken = 0
     @State private var selectedSelectionType: SendEntryKind = .file
+    @State private var isSendModeHelpPresented = false
 
     private let columns = [GridItem(.flexible(), spacing: Spacing.sm), GridItem(.flexible(), spacing: Spacing.sm)]
     private let selectionColumns = Array(repeating: GridItem(.flexible(), spacing: Spacing.sm), count: 4)
@@ -65,7 +66,29 @@ struct SendView: View {
                         .appFont(.headline)
                         .foregroundStyle(.primary)
                     Spacer()
-                    HStack(spacing: 0) {
+                    HStack(spacing: Spacing.xs) {
+                        Menu {
+                            ForEach(SendMode.allCases) { mode in
+                                Button {
+                                    store.selectSendMode(mode)
+                                } label: {
+                                    if store.sendMode == mode {
+                                        Label(sendModeLabel(for: mode), systemImage: "checkmark")
+                                    } else {
+                                        Text(sendModeLabel(for: mode))
+                                    }
+                                }
+                            }
+                            Divider()
+                            Button(FeatureTransferLocalization.resource("send.mode.explanation")) {
+                                isSendModeHelpPresented = true
+                            }
+                        } label: {
+                            Label(sendModeLabel(for: store.sendMode), systemImage: sendModeSymbol(for: store.sendMode))
+                        }
+                        .help(Text(FeatureTransferLocalization.resource("send.mode.help")))
+
+                        HStack(spacing: 0) {
                         Button { store.refreshNearbyPeers() } label: {
                             RefreshIcon(isRefreshing: store.isRefreshingDiscovery)
                         }
@@ -76,6 +99,7 @@ struct SendView: View {
                         }
                         .help(Text(FeatureTransferLocalization.resource(store.isScanningDiscovery ? "send.scanning" : "send.scan")))
                         .disabled(store.isScanningDiscovery)
+                        }
                     }
                     .buttonStyle(.borderless)
                     .foregroundStyle(.secondary)
@@ -153,6 +177,9 @@ struct SendView: View {
             reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.82),
             value: store.nearbyPeers.map(\.id)
         )
+        .sheet(isPresented: $isSendModeHelpPresented) {
+            SendModeHelpSheet()
+        }
     }
 
     private func sectionTitle(_ text: LocalizedStringResource) -> some View {
@@ -218,6 +245,53 @@ struct SendView: View {
     private func cancelDropZoneReset() {
         dropZoneResetTask?.cancel()
         dropZoneResetTask = nil
+    }
+
+    private func sendModeLabel(for mode: SendMode) -> String {
+        switch mode {
+        case .single:
+            FeatureTransferLocalization.string(forKey: "send.mode.single")
+        case .multiple:
+            FeatureTransferLocalization.string(forKey: "send.mode.multiple")
+        case .link:
+            FeatureTransferLocalization.string(forKey: "send.mode.link")
+        }
+    }
+
+    private func sendModeSymbol(for mode: SendMode) -> String {
+        switch mode {
+        case .single:
+            "paperplane"
+        case .multiple:
+            "paperplane.circle"
+        case .link:
+            "link"
+        }
+    }
+}
+
+private struct SendModeHelpSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Spacing.md) {
+            Text(FeatureTransferLocalization.resource("send.mode.sheetTitle"))
+                .appFont(.text(.title3, .bold))
+            Text(FeatureTransferLocalization.resource("send.mode.singleDescription"))
+                .fixedSize(horizontal: false, vertical: true)
+            Text(FeatureTransferLocalization.resource("send.mode.multipleDescription"))
+                .fixedSize(horizontal: false, vertical: true)
+            Text(FeatureTransferLocalization.resource("send.mode.linkDescription"))
+                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Spacer()
+                Button(FeatureTransferLocalization.resource("send.mode.close")) {
+                    dismiss()
+                }
+            }
+        }
+        .padding(Spacing.lg)
+        .frame(minWidth: 420)
     }
 }
 

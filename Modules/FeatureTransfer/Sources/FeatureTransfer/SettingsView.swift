@@ -82,6 +82,11 @@ struct SettingsView: View {
                     .help(Text(FeatureTransferLocalization.resource("settings.autoAcceptFavoritesHelp")))
             }
 
+            Section(FeatureTransferLocalization.resource("settings.section.sending")) {
+                Toggle(FeatureTransferLocalization.resource("settings.shareViaLinkAutoAccept"), isOn: $store.shareViaLinkAutoAccept)
+                    .help(Text(FeatureTransferLocalization.resource("settings.shareViaLinkAutoAcceptHelp")))
+            }
+
             Section(FeatureTransferLocalization.string(forKey: "settings.section.network")) {
                 LabeledContent {
                     deviceNameControls
@@ -139,6 +144,7 @@ struct SettingsView: View {
             deviceNameValidationMessage = nil
         }
         .onChange(of: store.autoAcceptFavorites) { _, _ in store.persistSettings() }
+        .onChange(of: store.shareViaLinkAutoAccept) { _, _ in store.persistSettings() }
         .onChange(of: store.allowDownloads) { _, newValue in
             store.persistSettings()
             if newValue {

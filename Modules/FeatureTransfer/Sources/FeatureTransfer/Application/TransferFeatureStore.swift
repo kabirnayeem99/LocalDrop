@@ -16,6 +16,8 @@ final class TransferFeatureStore {
     var launchAtLogin: Bool
     var reduceMotion: Bool
     var autoAcceptFavorites: Bool
+    var sendMode: SendMode
+    var shareViaLinkAutoAccept: Bool
     var deviceName: String
     var port: String
     var saveLocation: String
@@ -80,6 +82,8 @@ final class TransferFeatureStore {
         self.launchAtLogin = snapshot.launchAtLogin
         self.reduceMotion = snapshot.reduceMotion
         self.autoAcceptFavorites = snapshot.autoAcceptFavorites
+        self.sendMode = snapshot.sendMode
+        self.shareViaLinkAutoAccept = snapshot.shareViaLinkAutoAccept
         self.deviceName = LocalDeviceIdentity.normalizedCustomName(snapshot.protocolSettings.deviceName)
             ?? LocalDeviceIdentity.systemName()
         self.port = String(snapshot.protocolSettings.tcpPort)
@@ -271,6 +275,16 @@ final class TransferFeatureStore {
     }
 
     func send(to peerID: NearbyPeerItem.ID) {
+        guard stagedItems.isEmpty == false else {
+            showFeedback(
+                TransferFeedback(
+                    message: FeatureTransferLocalization.string(forKey: "feedback.sendRequiresStagedItems"),
+                    symbol: "tray.fill",
+                    tone: .pending
+                )
+            )
+            return
+        }
         logger.emit(
             level: .info,
             event: "transfer.send.requested",
@@ -288,6 +302,21 @@ final class TransferFeatureStore {
                 recordError(event: "transfer.send.failed", error: error)
             }
         }
+    }
+
+    func selectSendMode(_ mode: SendMode) {
+        if mode == .link, stagedItems.isEmpty {
+            showFeedback(
+                TransferFeedback(
+                    message: FeatureTransferLocalization.string(forKey: "feedback.linkRequiresStagedItems"),
+                    symbol: "link.badge.plus",
+                    tone: .pending
+                )
+            )
+            return
+        }
+        sendMode = mode
+        persistSettings()
     }
 
     func declineIncomingRequest() {
@@ -742,6 +771,8 @@ final class TransferFeatureStore {
             launchAtLogin: launchAtLogin,
             reduceMotion: reduceMotion,
             autoAcceptFavorites: autoAcceptFavorites,
+            sendMode: sendMode,
+            shareViaLinkAutoAccept: shareViaLinkAutoAccept,
             protocolSettings: currentProtocolSettings
         )
     }

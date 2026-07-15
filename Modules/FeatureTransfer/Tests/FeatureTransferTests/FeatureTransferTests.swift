@@ -593,6 +593,18 @@ final class FeatureTransferTests: XCTestCase {
             TransferProtocolSettings.normalizedIncomingPIN(from: loaded.protocolSettings.incomingPIN),
             loaded.protocolSettings.incomingPIN
         )
+        XCTAssertEqual(loaded.sendMode, .single)
+        XCTAssertFalse(loaded.shareViaLinkAutoAccept)
+    }
+
+    func testTransferSettingsSnapshotDefaultsSendModeAndLinkAutoAccept() {
+        let snapshot = TransferSettingsSnapshot.default(
+            deviceName: "LocalDrop Test Mac",
+            saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
+        )
+
+        XCTAssertEqual(snapshot.sendMode, .single)
+        XCTAssertFalse(snapshot.shareViaLinkAutoAccept)
     }
 
     func testEnsureIncomingPINGeneratesValidPINWhenMissing() {
@@ -1187,6 +1199,8 @@ final class FeatureTransferTests: XCTestCase {
         _ = SettingsView(store: store).body
         store.useHTTPS = false
         _ = SettingsView(store: store).body
+        store.shareViaLinkAutoAccept = true
+        _ = SettingsView(store: store).body
     }
 
     func testLocalSendRuntimeAdapterRestartSwitchesBetweenHTTPSAndHTTP() async throws {
@@ -1356,9 +1370,32 @@ final class FeatureTransferTests: XCTestCase {
             URL(fileURLWithPath: "/tmp/LocalDropTests/bravo.txt")
         ])
         _ = SendView(store: store, actions: actions).body
+        store.sendMode = .multiple
+        _ = SendView(store: store, actions: actions).body
+        store.sendMode = .link
+        _ = SendView(store: store, actions: actions).body
         _ = RootView(store: store, sendEntryActions: actions).body
         _ = SendTextEntrySheet(initialText: "", onStage: { _ in }, onCancel: {}).body
         _ = SendTextEntrySheet(initialText: "hello", onStage: { _ in }, onCancel: {}).body
+    }
+
+    func testSelectingLinkModeWithoutStagedItemsKeepsPersistedMode() {
+        let persistence = InMemorySettingsPersistence()
+        let store = TransferFeatureStore(
+            runtime: FakeTransferRuntime(),
+            settingsPersistence: persistence,
+            historyPersistence: InMemoryHistoryPersistence(),
+            loginItemManaging: FakeLoginItemManaging(),
+            snapshot: .default(
+                deviceName: "LocalDrop Test Mac",
+                saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
+            )
+        )
+
+        store.selectSendMode(.link)
+
+        XCTAssertEqual(store.sendMode, .single)
+        XCTAssertEqual(persistence.savedSnapshots.count, 0)
     }
 
     func testStageImportedItemsStagesFilesAndSwitchesToSendScreen() async {

@@ -45,6 +45,17 @@ struct MemorableIncomingPINGenerator {
         return generate(using: &generator)
     }
 
+    static func generate(
+        prefixRoll: Int,
+        suffixValue: Int,
+        fallbackValue: Int
+    ) -> String {
+        if prefixRoll == 0 {
+            return preferredPrefix + String(format: "%03d", max(0, suffixValue) % 1000)
+        }
+        return String(format: "%06d", max(0, fallbackValue) % 1_000_000)
+    }
+
     static func generate<R: RandomNumberGenerator>(using random: inout R) -> String {
         var specs = [CandidateSpec]()
         if Int.random(in: 0..<preferredPrefixFrequency, using: &random) == 0 {

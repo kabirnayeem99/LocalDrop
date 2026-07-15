@@ -8,13 +8,22 @@ enum TransferSecurityCopy {
     static let httpsDisabledMessage = "Transfers on this device will use plain HTTP on the local network until HTTPS is turned back on."
 }
 
+enum DeviceNameCopy {
+    static let fieldHint = "Choose the name other LocalSend devices will see."
+    static let validationMessage = "Enter a device name to apply."
+    static let useSystemName = "Use system name"
+    static let generateRandomAlias = "Generate random alias"
+}
+
 struct SettingsView: View {
     @Bindable var store: TransferFeatureStore
     @State private var saveLocationPulse = false
     @State private var securityDialog: SecurityDialog?
     @State private var pinDraft = ""
+    @State private var deviceNameDraft = ""
     @State private var showsIncomingPIN = false
     @State private var pinValidationMessage: String?
+    @State private var deviceNameValidationMessage: String?
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     @Environment(\.appReducesMotion) private var appReduceMotion
     @Environment(\.accentTheme) private var accentTheme
@@ -64,14 +73,15 @@ struct SettingsView: View {
                     .accessibilityIdentifier("settings-require-pin-toggle")
                     .help(Text(FeatureTransferLocalization.resource("settings.requirePINHelp")))
                 LabeledContent(FeatureTransferLocalization.string(forKey: "settings.incomingPIN")) {
-                    VStack(alignment: .leading, spacing: Spacing.xxs) {
-                        HStack(spacing: Spacing.xs) {
+                    VStack(alignment: .trailing, spacing: Spacing.xs) {
+                        HStack(alignment: .center, spacing: Spacing.xs) {
                             incomingPINField
 
                             Button(FeatureTransferLocalization.resource(showsIncomingPIN ? "settings.hide" : "settings.show")) {
                                 showsIncomingPIN.toggle()
                             }
                             .disabled(store.requirePIN == false)
+                            .controlSize(.regular)
                             .accessibilityIdentifier("settings-incoming-pin-visibility")
                         }
 
@@ -80,6 +90,7 @@ struct SettingsView: View {
                                 applyIncomingPIN()
                             }
                             .disabled(canApplyIncomingPIN == false)
+                            .controlSize(.regular)
                             .accessibilityIdentifier("settings-incoming-pin-apply")
 
                             Button(FeatureTransferLocalization.resource("settings.regenerate")) {
@@ -88,19 +99,22 @@ struct SettingsView: View {
                                 pinValidationMessage = nil
                             }
                             .disabled(store.requirePIN == false)
+                            .controlSize(.regular)
                             .accessibilityIdentifier("settings-incoming-pin-regenerate")
                         }
-
+                    }
+                    .fixedSize(horizontal: true, vertical: false)
+                } label: {
+                    VStack(alignment: .leading, spacing: Spacing.xxs) {
+                        Text(FeatureTransferLocalization.string(forKey: "settings.incomingPIN"))
                         if let pinValidationMessage {
                             Text(pinValidationMessage)
                                 .appFont(.caption1)
                                 .foregroundStyle(SemanticColor.pending)
-                                .frame(maxWidth: .infinity, alignment: .leading)
                         } else {
                             Text(FeatureTransferLocalization.resource("settings.incomingPINHint"))
                                 .appFont(.caption1)
                                 .foregroundStyle(.secondary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -110,7 +124,53 @@ struct SettingsView: View {
             }
 
             Section(FeatureTransferLocalization.string(forKey: "settings.section.network")) {
-                LabeledContent(FeatureTransferLocalization.string(forKey: "settings.deviceName"), value: store.deviceName)
+                LabeledContent(FeatureTransferLocalization.string(forKey: "settings.deviceName")) {
+                    VStack(alignment: .leading, spacing: Spacing.xxs) {
+                        HStack(alignment: .top, spacing: Spacing.xs) {
+                            TextField(
+                                FeatureTransferLocalization.string(forKey: "settings.deviceName"),
+                                text: $deviceNameDraft
+                            )
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 240)
+                            .accessibilityIdentifier("settings-device-name-field")
+                            .onSubmit { applyDeviceName() }
+
+                            Button(FeatureTransferLocalization.resource("settings.apply")) {
+                                applyDeviceName()
+                            }
+                            .disabled(canApplyDeviceName == false)
+                            .accessibilityIdentifier("settings-device-name-apply")
+
+                            Button {
+                                applySystemDeviceName()
+                            } label: {
+                                Image(systemName: "desktopcomputer")
+                            }
+                            .help(Text(DeviceNameCopy.useSystemName))
+                            .accessibilityIdentifier("settings-device-name-system")
+
+                            Button {
+                                generateRandomAlias()
+                            } label: {
+                                Image(systemName: "dice")
+                            }
+                            .help(Text(DeviceNameCopy.generateRandomAlias))
+                            .accessibilityIdentifier("settings-device-name-random")
+                        }
+
+                        if let deviceNameValidationMessage {
+                            Text(deviceNameValidationMessage)
+                                .appFont(.caption1)
+                                .foregroundStyle(SemanticColor.pending)
+                        } else {
+                            Text(DeviceNameCopy.fieldHint)
+                                .appFont(.caption1)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
                 LabeledContent(FeatureTransferLocalization.string(forKey: "settings.port")) {
                     Text(store.port)
                         .foregroundStyle(.secondary)
@@ -121,11 +181,13 @@ struct SettingsView: View {
                 Toggle(FeatureTransferLocalization.resource("settings.useHTTPS"), isOn: $store.useHTTPS)
                     .help(Text(FeatureTransferLocalization.resource("settings.useHTTPSHelp")))
             }
+
         }
         .formStyle(.grouped)
         .tint(accentTheme.primary)
         .onAppear {
             pinDraft = store.incomingPIN
+            deviceNameDraft = store.deviceName
         }
         .alert(item: $securityDialog) { dialog in
             Alert(
@@ -153,6 +215,10 @@ struct SettingsView: View {
         }
         .onChange(of: store.incomingPIN) { _, newValue in
             pinDraft = newValue
+        }
+        .onChange(of: store.deviceName) { _, newValue in
+            deviceNameDraft = newValue
+            deviceNameValidationMessage = nil
         }
         .onChange(of: store.autoAcceptFavorites) { _, _ in store.persistSettings() }
         .onChange(of: store.allowDownloads) { _, newValue in
@@ -201,6 +267,11 @@ struct SettingsView: View {
         TransferProtocolSettings.normalizedIncomingPIN(from: pinDraft)
     }
 
+    private var canApplyDeviceName: Bool {
+        guard let normalized = LocalDeviceIdentity.normalizedCustomName(deviceNameDraft) else { return false }
+        return normalized != store.deviceName
+    }
+
     private func chooseSaveLocation() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
@@ -234,6 +305,25 @@ struct SettingsView: View {
             pinDraft = store.incomingPIN
             pinValidationMessage = nil
         }
+    }
+
+    private func applyDeviceName() {
+        guard store.updateDeviceName(deviceNameDraft) else {
+            deviceNameValidationMessage = DeviceNameCopy.validationMessage
+            return
+        }
+        deviceNameDraft = store.deviceName
+        deviceNameValidationMessage = nil
+    }
+
+    private func applySystemDeviceName() {
+        deviceNameDraft = store.useSystemDeviceName()
+        deviceNameValidationMessage = nil
+    }
+
+    private func generateRandomAlias() {
+        deviceNameDraft = store.generateRandomDeviceNameAlias()
+        deviceNameValidationMessage = nil
     }
 }
 

@@ -204,7 +204,7 @@ public final class TransferFeatureContainer {
         fileManager: FileManager = .default
     ) -> TransferFeatureContainer {
         let saveLocation = defaultSaveLocation(fileManager: fileManager)
-        let deviceName = Host.current().localizedName ?? "LocalDrop Mac"
+        let deviceName = LocalDeviceIdentity.systemName()
         let snapshot = TransferSettingsSnapshot.default(deviceName: deviceName, saveLocation: saveLocation)
         let store = TransferFeatureStore(
             runtime: NoopTransferRuntime(),
@@ -301,7 +301,7 @@ public final class TransferFeatureContainer {
             previousStepUptimeNanoseconds = now
         }
         let saveLocation = defaultSaveLocation(fileManager: fileManager)
-        let deviceName = Host.current().localizedName ?? "LocalDrop Mac"
+        let deviceName = LocalDeviceIdentity.systemName()
         let logger = makeLogger(baseDirectory: baseDirectory, hostName: deviceName)
         logger.emit(level: .info, event: "app.launch.started", scope: "TransferFeatureContainer")
         recordBootstrapStep(logger, "application_support_and_logger")

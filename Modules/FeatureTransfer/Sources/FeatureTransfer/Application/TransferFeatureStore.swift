@@ -80,7 +80,8 @@ final class TransferFeatureStore {
         self.launchAtLogin = snapshot.launchAtLogin
         self.reduceMotion = snapshot.reduceMotion
         self.autoAcceptFavorites = snapshot.autoAcceptFavorites
-        self.deviceName = snapshot.protocolSettings.deviceName
+        self.deviceName = LocalDeviceIdentity.normalizedCustomName(snapshot.protocolSettings.deviceName)
+            ?? LocalDeviceIdentity.systemName()
         self.port = String(snapshot.protocolSettings.tcpPort)
         self.saveLocation = snapshot.protocolSettings.saveLocation.path
         self.requirePIN = snapshot.protocolSettings.requirePIN
@@ -109,13 +110,13 @@ final class TransferFeatureStore {
     }
 
     var waitingIdentifier: String {
-        let source = currentProtocolSettings.deviceName.isEmpty ? "LD" : currentProtocolSettings.deviceName
+        let source = resolvedDeviceName.isEmpty ? "LD" : resolvedDeviceName
         return String(source.prefix(2)).uppercased()
     }
 
     var currentProtocolSettings: TransferProtocolSettings {
         TransferProtocolSettings(
-            deviceName: deviceName,
+            deviceName: resolvedDeviceName,
             tcpPort: Int(port) ?? 53317,
             requirePIN: requirePIN,
             incomingPIN: resolvedIncomingPIN,
@@ -539,6 +540,25 @@ final class TransferFeatureStore {
         return true
     }
 
+    @discardableResult
+    func updateDeviceName(_ candidate: String) -> Bool {
+        guard let normalized = LocalDeviceIdentity.normalizedCustomName(candidate) else {
+            return false
+        }
+        applyResolvedDeviceName(normalized)
+        return true
+    }
+
+    @discardableResult
+    func useSystemDeviceName(resolver: () -> String = LocalDeviceIdentity.systemName) -> String {
+        applyResolvedDeviceName(resolver())
+    }
+
+    @discardableResult
+    func generateRandomDeviceNameAlias(generator: () -> String = LocalDeviceIdentity.randomAlias) -> String {
+        applyResolvedDeviceName(generator())
+    }
+
     private func bindRuntimeStreamsIfNeeded() {
         guard observationTasks.isEmpty else { return }
 
@@ -730,6 +750,10 @@ final class TransferFeatureStore {
         TransferProtocolSettings.normalizedIncomingPIN(from: incomingPIN) ?? TransferProtocolSettings.generateIncomingPIN()
     }
 
+    private var resolvedDeviceName: String {
+        LocalDeviceIdentity.normalizedCustomName(deviceName) ?? LocalDeviceIdentity.systemName()
+    }
+
     private func settingsAttributes() -> [AppLogAttribute] {
         [
             .bool("settings.require_pin", requirePIN),
@@ -737,6 +761,17 @@ final class TransferFeatureStore {
             .bool("settings.use_https", useHTTPS),
             .string("settings.quick_save_mode", quickSave.rawValue)
         ]
+    }
+
+    @discardableResult
+    private func applyResolvedDeviceName(_ candidate: String) -> String {
+        let normalized = LocalDeviceIdentity.normalizedCustomName(candidate) ?? LocalDeviceIdentity.systemName()
+        let didChange = normalized != resolvedDeviceName
+        deviceName = normalized
+        if didChange {
+            persistSettings()
+        }
+        return normalized
     }
 
     private func recordError(event: String, error: any Error) {

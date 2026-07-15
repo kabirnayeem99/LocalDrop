@@ -687,6 +687,96 @@ final class FeatureTransferTests: XCTestCase {
         XCTAssertTrue(persistence.savedSnapshots.isEmpty)
     }
 
+    func testUpdateDeviceNamePersistsTrimmedValueAndPushesRuntimeSettings() async {
+        let runtime = FakeTransferRuntime()
+        let persistence = InMemorySettingsPersistence()
+        let store = TransferFeatureStore(
+            runtime: runtime,
+            settingsPersistence: persistence,
+            historyPersistence: InMemoryHistoryPersistence(),
+            loginItemManaging: FakeLoginItemManaging(),
+            snapshot: .default(
+                deviceName: "LocalDrop Test Mac",
+                saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
+            )
+        )
+
+        XCTAssertTrue(store.updateDeviceName("  Studio   Mac  "))
+
+        XCTAssertEqual(store.deviceName, "Studio Mac")
+        XCTAssertEqual(persistence.savedSnapshots.last?.protocolSettings.deviceName, "Studio Mac")
+
+        let updated = await waitForRuntimeSettings(runtime)
+        XCTAssertEqual(updated?.deviceName, "Studio Mac")
+    }
+
+    func testUpdateDeviceNameRejectsBlankValue() {
+        let runtime = FakeTransferRuntime()
+        let persistence = InMemorySettingsPersistence()
+        let store = TransferFeatureStore(
+            runtime: runtime,
+            settingsPersistence: persistence,
+            historyPersistence: InMemoryHistoryPersistence(),
+            loginItemManaging: FakeLoginItemManaging(),
+            snapshot: .default(
+                deviceName: "LocalDrop Test Mac",
+                saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
+            )
+        )
+
+        XCTAssertFalse(store.updateDeviceName("   "))
+        XCTAssertEqual(store.deviceName, "LocalDrop Test Mac")
+        XCTAssertTrue(persistence.savedSnapshots.isEmpty)
+    }
+
+    func testUseSystemDeviceNamePersistsResolvedName() async {
+        let runtime = FakeTransferRuntime()
+        let persistence = InMemorySettingsPersistence()
+        let store = TransferFeatureStore(
+            runtime: runtime,
+            settingsPersistence: persistence,
+            historyPersistence: InMemoryHistoryPersistence(),
+            loginItemManaging: FakeLoginItemManaging(),
+            snapshot: .default(
+                deviceName: "LocalDrop Test Mac",
+                saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
+            )
+        )
+
+        let applied = store.useSystemDeviceName { "Studio Display" }
+
+        XCTAssertEqual(applied, "Studio Display")
+        XCTAssertEqual(store.deviceName, "Studio Display")
+        XCTAssertEqual(persistence.savedSnapshots.last?.protocolSettings.deviceName, "Studio Display")
+
+        let updated = await waitForRuntimeSettings(runtime)
+        XCTAssertEqual(updated?.deviceName, "Studio Display")
+    }
+
+    func testGenerateRandomDeviceNameAliasPersistsGeneratedAlias() async {
+        let runtime = FakeTransferRuntime()
+        let persistence = InMemorySettingsPersistence()
+        let store = TransferFeatureStore(
+            runtime: runtime,
+            settingsPersistence: persistence,
+            historyPersistence: InMemoryHistoryPersistence(),
+            loginItemManaging: FakeLoginItemManaging(),
+            snapshot: .default(
+                deviceName: "LocalDrop Test Mac",
+                saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
+            )
+        )
+
+        let applied = store.generateRandomDeviceNameAlias { "Copper Summit" }
+
+        XCTAssertEqual(applied, "Copper Summit")
+        XCTAssertEqual(store.deviceName, "Copper Summit")
+        XCTAssertEqual(persistence.savedSnapshots.last?.protocolSettings.deviceName, "Copper Summit")
+
+        let updated = await waitForRuntimeSettings(runtime)
+        XCTAssertEqual(updated?.deviceName, "Copper Summit")
+    }
+
     func testPersistSettingsFailureSurfacesErrorFeedback() async {
         let runtime = FakeTransferRuntime()
         await runtime.setUpdateSettingsError(TestFailure.runtimeApplyFailed)

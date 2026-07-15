@@ -1,7 +1,7 @@
 import Foundation
 
-enum FeatureTransferLocalization {
-    static let bundle: Bundle = .module
+public enum FeatureTransferLocalization {
+    public static let bundle: Bundle = .module
     private static let catalog: StringCatalog? = {
         guard
             let url = bundle.url(forResource: "Localizable", withExtension: "xcstrings"),
@@ -25,7 +25,7 @@ enum FeatureTransferLocalization {
         lock.unlock()
     }
 
-    static func string(forKey key: String) -> String {
+    public static func string(forKey key: String) -> String {
         if let override = localizedValue(forKey: key, preferredKeys: currentPreferredLanguageKeys()) {
             return override
         }
@@ -38,11 +38,11 @@ enum FeatureTransferLocalization {
         return localizedValue(forKey: key, preferredKeys: ["en"]) ?? localized
     }
 
-    static func resource(_ key: String.LocalizationValue) -> LocalizedStringResource {
+    public static func resource(_ key: String.LocalizationValue) -> LocalizedStringResource {
         LocalizedStringResource(key, bundle: .atURL(bundle.bundleURL))
     }
 
-    static func format(_ key: String, _ arguments: CVarArg...) -> String {
+    public static func format(_ key: String, _ arguments: CVarArg...) -> String {
         String(format: string(forKey: key), arguments: arguments)
     }
 

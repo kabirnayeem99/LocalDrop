@@ -19,6 +19,7 @@ struct SettingsView: View {
     @Bindable var store: TransferFeatureStore
     @State private var saveLocationPulse = false
     @State private var securityDialog: SecurityDialog?
+    @State private var hideIncomingPINTask: Task<Void, Never>?
     @State private var pinDraft = ""
     @State private var deviceNameDraft = ""
     @State private var showsIncomingPIN = false
@@ -72,104 +73,20 @@ struct SettingsView: View {
                 Toggle(FeatureTransferLocalization.resource("settings.requirePIN"), isOn: $store.requirePIN)
                     .accessibilityIdentifier("settings-require-pin-toggle")
                     .help(Text(FeatureTransferLocalization.resource("settings.requirePINHelp")))
-                LabeledContent(FeatureTransferLocalization.string(forKey: "settings.incomingPIN")) {
-                    VStack(alignment: .trailing, spacing: Spacing.xs) {
-                        HStack(alignment: .center, spacing: Spacing.xs) {
-                            incomingPINField
-
-                            Button(FeatureTransferLocalization.resource(showsIncomingPIN ? "settings.hide" : "settings.show")) {
-                                showsIncomingPIN.toggle()
-                            }
-                            .disabled(store.requirePIN == false)
-                            .controlSize(.regular)
-                            .accessibilityIdentifier("settings-incoming-pin-visibility")
-                        }
-
-                        HStack(spacing: Spacing.xs) {
-                            Button(FeatureTransferLocalization.resource("settings.apply")) {
-                                applyIncomingPIN()
-                            }
-                            .disabled(canApplyIncomingPIN == false)
-                            .controlSize(.regular)
-                            .accessibilityIdentifier("settings-incoming-pin-apply")
-
-                            Button(FeatureTransferLocalization.resource("settings.regenerate")) {
-                                store.regenerateIncomingPIN()
-                                pinDraft = store.incomingPIN
-                                pinValidationMessage = nil
-                            }
-                            .disabled(store.requirePIN == false)
-                            .controlSize(.regular)
-                            .accessibilityIdentifier("settings-incoming-pin-regenerate")
-                        }
-                    }
-                    .fixedSize(horizontal: true, vertical: false)
+                LabeledContent {
+                    incomingPINControls
                 } label: {
-                    VStack(alignment: .leading, spacing: Spacing.xxs) {
-                        Text(FeatureTransferLocalization.string(forKey: "settings.incomingPIN"))
-                        if let pinValidationMessage {
-                            Text(pinValidationMessage)
-                                .appFont(.caption1)
-                                .foregroundStyle(SemanticColor.pending)
-                        } else {
-                            Text(FeatureTransferLocalization.resource("settings.incomingPINHint"))
-                                .appFont(.caption1)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    incomingPINLabel
                 }
                 Toggle(FeatureTransferLocalization.resource("settings.autoAcceptFavorites"), isOn: $store.autoAcceptFavorites)
                     .help(Text(FeatureTransferLocalization.resource("settings.autoAcceptFavoritesHelp")))
             }
 
             Section(FeatureTransferLocalization.string(forKey: "settings.section.network")) {
-                LabeledContent(FeatureTransferLocalization.string(forKey: "settings.deviceName")) {
-                    VStack(alignment: .leading, spacing: Spacing.xxs) {
-                        HStack(alignment: .top, spacing: Spacing.xs) {
-                            TextField(
-                                FeatureTransferLocalization.string(forKey: "settings.deviceName"),
-                                text: $deviceNameDraft
-                            )
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 240)
-                            .accessibilityIdentifier("settings-device-name-field")
-                            .onSubmit { applyDeviceName() }
-
-                            Button(FeatureTransferLocalization.resource("settings.apply")) {
-                                applyDeviceName()
-                            }
-                            .disabled(canApplyDeviceName == false)
-                            .accessibilityIdentifier("settings-device-name-apply")
-
-                            Button {
-                                applySystemDeviceName()
-                            } label: {
-                                Image(systemName: "desktopcomputer")
-                            }
-                            .help(Text(DeviceNameCopy.useSystemName))
-                            .accessibilityIdentifier("settings-device-name-system")
-
-                            Button {
-                                generateRandomAlias()
-                            } label: {
-                                Image(systemName: "dice")
-                            }
-                            .help(Text(DeviceNameCopy.generateRandomAlias))
-                            .accessibilityIdentifier("settings-device-name-random")
-                        }
-
-                        if let deviceNameValidationMessage {
-                            Text(deviceNameValidationMessage)
-                                .appFont(.caption1)
-                                .foregroundStyle(SemanticColor.pending)
-                        } else {
-                            Text(DeviceNameCopy.fieldHint)
-                                .appFont(.caption1)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                LabeledContent {
+                    deviceNameControls
+                } label: {
+                    deviceNameLabel
                 }
                 LabeledContent(FeatureTransferLocalization.string(forKey: "settings.port")) {
                     Text(store.port)
@@ -215,6 +132,7 @@ struct SettingsView: View {
         }
         .onChange(of: store.incomingPIN) { _, newValue in
             pinDraft = newValue
+            sanitizeIncomingPINDraft()
         }
         .onChange(of: store.deviceName) { _, newValue in
             deviceNameDraft = newValue
@@ -233,13 +151,20 @@ struct SettingsView: View {
                 securityDialog = .httpsDisabled
             }
         }
+        .onChange(of: pinDraft) { _, _ in
+            sanitizeIncomingPINDraft()
+        }
+        .onDisappear {
+            hideIncomingPINTask?.cancel()
+            hideIncomingPINTask = nil
+        }
     }
 
     @ViewBuilder private var incomingPINField: some View {
         if showsIncomingPIN {
             TextField(FeatureTransferLocalization.string(forKey: "settings.incomingPINPlaceholder"), text: $pinDraft)
                 .textFieldStyle(.roundedBorder)
-                .frame(width: 110)
+                .frame(width: 156)
                 .monospaced()
                 .disabled(store.requirePIN == false)
                 .accessibilityIdentifier("settings-incoming-pin-field")
@@ -248,13 +173,89 @@ struct SettingsView: View {
         } else {
             SecureField(FeatureTransferLocalization.string(forKey: "settings.incomingPINPlaceholder"), text: $pinDraft)
                 .textFieldStyle(.roundedBorder)
-                .frame(width: 110)
+                .frame(width: 156)
                 .monospaced()
                 .disabled(store.requirePIN == false)
                 .accessibilityIdentifier("settings-incoming-pin-field")
                 .environment(\.layoutDirection, .leftToRight)
                 .onSubmit { applyIncomingPIN() }
         }
+    }
+
+    private var incomingPINControls: some View {
+        VStack(alignment: .trailing, spacing: Spacing.xs) {
+            HStack(alignment: .center, spacing: Spacing.xs) {
+                incomingPINField
+                incomingPINVisibilityButton
+            }
+
+            HStack(spacing: Spacing.xs) {
+                incomingPINApplyButton
+                incomingPINRegenerateButton
+            }
+        }
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private var incomingPINLabel: some View {
+        VStack(alignment: .leading, spacing: Spacing.xxs) {
+            Text(FeatureTransferLocalization.string(forKey: "settings.incomingPIN"))
+            if let pinValidationMessage {
+                Text(pinValidationMessage)
+                    .appFont(.caption1)
+                    .foregroundStyle(SemanticColor.pending)
+            } else {
+                Text(FeatureTransferLocalization.resource("settings.incomingPINHint"))
+                    .appFont(.caption1)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var incomingPINVisibilityButton: some View {
+        Button {
+            toggleIncomingPINVisibility()
+        } label: {
+            Image(systemName: showsIncomingPIN ? "eye.slash" : "eye")
+        }
+        .disabled(store.requirePIN == false)
+        .controlSize(.regular)
+        .labelStyle(.iconOnly)
+        .help(Text(FeatureTransferLocalization.resource(showsIncomingPIN ? "settings.hide" : "settings.show")))
+        .accessibilityLabel(Text(FeatureTransferLocalization.resource(showsIncomingPIN ? "settings.hide" : "settings.show")))
+        .accessibilityIdentifier("settings-incoming-pin-visibility")
+    }
+
+    private var incomingPINApplyButton: some View {
+        Button {
+            applyIncomingPIN()
+        } label: {
+            Image(systemName: "checkmark")
+        }
+        .disabled(canApplyIncomingPIN == false)
+        .controlSize(.regular)
+        .labelStyle(.iconOnly)
+        .help(Text(FeatureTransferLocalization.resource("settings.apply")))
+        .accessibilityLabel(Text(FeatureTransferLocalization.resource("settings.apply")))
+        .accessibilityIdentifier("settings-incoming-pin-apply")
+    }
+
+    private var incomingPINRegenerateButton: some View {
+        Button {
+            store.regenerateIncomingPIN()
+            pinDraft = store.incomingPIN
+            pinValidationMessage = nil
+            sanitizeIncomingPINDraft()
+        } label: {
+            Image(systemName: "dice")
+        }
+        .disabled(store.requirePIN == false)
+        .controlSize(.regular)
+        .labelStyle(.iconOnly)
+        .help(Text(FeatureTransferLocalization.resource("settings.regenerate")))
+        .accessibilityLabel(Text(FeatureTransferLocalization.resource("settings.regenerate")))
+        .accessibilityIdentifier("settings-incoming-pin-regenerate")
     }
 
     private var canApplyIncomingPIN: Bool {
@@ -270,6 +271,67 @@ struct SettingsView: View {
     private var canApplyDeviceName: Bool {
         guard let normalized = LocalDeviceIdentity.normalizedCustomName(deviceNameDraft) else { return false }
         return normalized != store.deviceName
+    }
+
+    private var deviceNameControls: some View {
+        HStack(spacing: Spacing.xs) {
+            TextField(
+                "",
+                text: $deviceNameDraft,
+                prompt: Text(FeatureTransferLocalization.string(forKey: "settings.deviceName"))
+            )
+            .textFieldStyle(.roundedBorder)
+            .frame(width: 240)
+            .accessibilityIdentifier("settings-device-name-field")
+            .onSubmit { applyDeviceName() }
+
+            Button(FeatureTransferLocalization.resource("settings.apply")) {
+                applyDeviceName()
+            }
+            .disabled(canApplyDeviceName == false)
+            .accessibilityIdentifier("settings-device-name-apply")
+
+            Button {
+                applySystemDeviceName()
+            } label: {
+                Image(systemName: "desktopcomputer")
+            }
+            .help(Text(DeviceNameCopy.useSystemName))
+            .accessibilityIdentifier("settings-device-name-system")
+
+            Button {
+                generateRandomAlias()
+            } label: {
+                Image(systemName: "dice")
+            }
+            .help(Text(DeviceNameCopy.generateRandomAlias))
+            .accessibilityIdentifier("settings-device-name-random")
+        }
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private var deviceNameLabel: some View {
+        VStack(alignment: .leading, spacing: Spacing.xxs) {
+            Text(FeatureTransferLocalization.string(forKey: "settings.deviceName"))
+            if let deviceNameValidationMessage {
+                Text(deviceNameValidationMessage)
+                    .appFont(.caption1)
+                    .foregroundStyle(SemanticColor.pending)
+            } else {
+                Text(DeviceNameCopy.fieldHint)
+                    .appFont(.caption1)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func sanitizeIncomingPINDraft() {
+        let digitsOnly = pinDraft.filter(\.isNumber)
+        let capped = String(digitsOnly.prefix(TransferProtocolSettings.incomingPINLength))
+        if pinDraft != capped {
+            pinDraft = capped
+        }
     }
 
     private func chooseSaveLocation() {
@@ -294,6 +356,7 @@ struct SettingsView: View {
 
     private func applyIncomingPIN() {
         guard store.requirePIN else { return }
+        sanitizeIncomingPINDraft()
         guard let normalized = normalizedPinDraft else {
             pinValidationMessage = FeatureTransferLocalization.format(
                 "settings.incomingPINValidation",
@@ -304,6 +367,27 @@ struct SettingsView: View {
         if store.updateIncomingPIN(normalized) {
             pinDraft = store.incomingPIN
             pinValidationMessage = nil
+        }
+    }
+
+    private func toggleIncomingPINVisibility() {
+        showsIncomingPIN.toggle()
+        scheduleIncomingPINAutoHideIfNeeded()
+    }
+
+    private func scheduleIncomingPINAutoHideIfNeeded() {
+        hideIncomingPINTask?.cancel()
+        hideIncomingPINTask = nil
+
+        guard showsIncomingPIN else { return }
+
+        hideIncomingPINTask = Task {
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                showsIncomingPIN = false
+                hideIncomingPINTask = nil
+            }
         }
     }
 

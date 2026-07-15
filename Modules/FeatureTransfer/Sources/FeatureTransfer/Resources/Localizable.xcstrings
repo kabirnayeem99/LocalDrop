@@ -1,6 +1,9 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "" : {
+
+    },
     "accent.abbasidObsidian" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -432,6 +435,499 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "اموی موتی"
+          }
+        }
+      }
+    },
+    "app.about.description1" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "LocalDrop هو تطبيق أصلي لنظام macOS لمشاركة الملفات ومتوافق بالكامل مع بروتوكول LocalSend. يتيح لك إرسال الملفات والنصوص بأمان إلى الأجهزة القريبة المتوافقة مع LocalSend عبر شبكتك المحلية، من دون الحاجة إلى اتصال بالإنترنت."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "LocalDrop is a native macOS file-sharing app fully compatible with the LocalSend protocol. It lets you securely send files and text to nearby LocalSend-compatible devices over your local network, without requiring an internet connection."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "LocalDrop adalah app berbagi file native macOS yang sepenuhnya kompatibel dengan protokol LocalSend. App ini memungkinkan Anda mengirim file dan teks dengan aman ke perangkat terdekat yang kompatibel dengan LocalSend melalui jaringan lokal, tanpa memerlukan koneksi internet."
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "LocalDrop ایک مقامی macOS فائل شیئرنگ ایپ ہے جو LocalSend پروٹوکول کے ساتھ مکمل طور پر مطابقت رکھتی ہے۔ یہ آپ کو اپنی لوکل نیٹ ورک پر قریب موجود LocalSend-مطابقت رکھنے والے ڈیوائسز کو محفوظ طریقے سے فائلیں اور متن بھیجنے دیتی ہے، بغیر انٹرنیٹ کنکشن کے۔"
+          }
+        }
+      }
+    },
+    "app.about.description2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "أُنشئ هذا المشروع لتقديم تجربة macOS أكثر تكاملاً، بواجهة أصلية بالكامل، وسلوك على مستوى النظام، وأداء مصمم خصيصًا لأجهزة Mac."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This project was created to provide a more deeply integrated macOS experience, with a fully native interface, system-level behavior, and performance tailored specifically for the Mac."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Proyek ini dibuat untuk menghadirkan pengalaman macOS yang lebih terintegrasi, dengan antarmuka native sepenuhnya, perilaku tingkat sistem, dan performa yang dirancang khusus untuk Mac."
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "یہ پروجیکٹ زیادہ گہرا مربوط macOS تجربہ فراہم کرنے کے لیے بنایا گیا ہے، جس میں مکمل طور پر مقامی انٹرفیس، سسٹم لیول رویہ، اور خاص طور پر Mac کے لیے تیارکردہ کارکردگی شامل ہے۔"
+          }
+        }
+      }
+    },
+    "app.about.description3" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "بُني هذا المشروع تقديرًا لمشروع LocalSend الأصلي ومساهميه، إذ إن بروتوكوله المفتوح وعمله مفتوح المصدر هما ما جعلا هذا التطبيق ممكنًا. ما يزال LocalSend هو الأساس للنظام البيئي الأوسع متعدد المنصات."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "It is built with gratitude to the original LocalSend project and its contributors, whose open protocol and open-source work made this app possible. LocalSend remains the foundation of the wider cross-platform ecosystem."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "App ini dibangun dengan rasa terima kasih kepada proyek LocalSend asli dan para kontributornya, yang protokol terbuka dan karya open-source-nya memungkinkan app ini terwujud. LocalSend tetap menjadi fondasi ekosistem lintas platform yang lebih luas."
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "یہ ایپ اصل LocalSend پروجیکٹ اور اس کے معاونین کے لیے تشکر کے ساتھ بنائی گئی ہے، جن کے کھلے پروٹوکول اور اوپن سورس کام نے اس ایپ کو ممکن بنایا۔ LocalSend اب بھی وسیع کراس پلیٹ فارم ایکو سسٹم کی بنیاد ہے۔"
+          }
+        }
+      }
+    },
+    "app.about.exclusiveMacOS" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "متاح حصريًا لنظام macOS"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Exclusively for macOS"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eksklusif untuk macOS"
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "صرف macOS کے لیے"
+          }
+        }
+      }
+    },
+    "app.about.privacyPolicy" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "سياسة الخصوصية"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Privacy Policy"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kebijakan Privasi"
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "پرائیویسی پالیسی"
+          }
+        }
+      }
+    },
+    "app.about.supportLocalSend" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ادعم مشروع LocalSend الرئيسي"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Support LocalSend Main Project"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dukung Proyek Utama LocalSend"
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "LocalSend کے مرکزی پروجیکٹ کی معاونت کریں"
+          }
+        }
+      }
+    },
+    "app.about.tagline" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "مشاركة ملفات أصلية لنظام macOS ضمن منظومة LocalSend"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Native macOS file sharing for the LocalSend ecosystem"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Berbagi file native macOS untuk ekosistem LocalSend"
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "LocalSend ایکو سسٹم کے لیے مقامی macOS فائل شیئرنگ"
+          }
+        }
+      }
+    },
+    "app.about.termsOfUse" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "شروط الاستخدام"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Terms of Use"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Syarat Penggunaan"
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "شرائط استعمال"
+          }
+        }
+      }
+    },
+    "app.about.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "حول LocalDrop"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "About LocalDrop"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tentang LocalDrop"
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "LocalDrop کے بارے میں"
+          }
+        }
+      }
+    },
+    "app.dialog.chooseFilesToSend" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "اختر الملفات لإرسالها"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose files to send"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pilih file untuk dikirim"
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "بھیجنے کے لیے فائلیں منتخب کریں"
+          }
+        }
+      }
+    },
+    "app.dialog.chooseFoldersToSend" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "اختر المجلدات لإرسالها"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose folders to send"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pilih folder untuk dikirim"
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "بھیجنے کے لیے فولڈرز منتخب کریں"
+          }
+        }
+      }
+    },
+    "app.help.localDropHelp" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "مساعدة LocalDrop"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "LocalDrop Help"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bantuan LocalDrop"
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "LocalDrop مدد"
+          }
+        }
+      }
+    },
+    "app.help.protocolDocs" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "توثيق بروتوكول LocalSend"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "LocalSend Protocol Docs"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dokumentasi Protokol LocalSend"
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "LocalSend پروٹوکول دستاویزات"
+          }
+        }
+      }
+    },
+    "app.help.reportIssue" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "الإبلاغ عن مشكلة"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Report an Issue"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Laporkan Masalah"
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "مسئلہ رپورٹ کریں"
+          }
+        }
+      }
+    },
+    "app.menu.clearHistory" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "مسح السجل"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear History"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hapus Riwayat"
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "تاریخ صاف کریں"
+          }
+        }
+      }
+    },
+    "app.menu.sendText" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "إرسال نص…"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Send Text…"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kirim Teks…"
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "متن بھیجیں…"
+          }
+        }
+      }
+    },
+    "app.menu.view" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "عرض"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "View"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tampilan"
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "منظر"
           }
         }
       }

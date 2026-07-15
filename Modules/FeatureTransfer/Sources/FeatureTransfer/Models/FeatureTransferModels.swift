@@ -882,23 +882,10 @@ struct TransferProtocolSettings: Codable, Equatable, Sendable {
         try container.encode(saveLocation, forKey: .saveLocation)
     }
 
-    static let incomingPINLength = 6
-    static let memorableIncomingPINPrefix = "710"
-    static let memorableIncomingPINPrefixFrequency = 10
+    static let incomingPINLength = MemorableIncomingPINGenerator.pinLength
 
     static func generateIncomingPIN() -> String {
-        generateIncomingPIN(
-            prefixRoll: Int.random(in: 0..<memorableIncomingPINPrefixFrequency),
-            suffixValue: Int.random(in: 0..<1_000),
-            fallbackValue: Int.random(in: 0..<1_000_000)
-        )
-    }
-
-    static func generateIncomingPIN(prefixRoll: Int, suffixValue: Int, fallbackValue: Int) -> String {
-        if prefixRoll == 0 {
-            return memorableIncomingPINPrefix + String(format: "%03d", suffixValue % 1_000)
-        }
-        return String(format: "%0\(incomingPINLength)d", fallbackValue % 1_000_000)
+        MemorableIncomingPINGenerator.generate()
     }
 
     static func normalizedIncomingPIN(from candidate: String?) -> String? {

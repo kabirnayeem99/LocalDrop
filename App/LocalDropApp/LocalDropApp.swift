@@ -48,7 +48,7 @@ struct LocalDropApp: App {
                     onCompletion: handleImportedItems,
                     onCancellation: {}
                 )
-                .fileDialogMessage(Text("Choose files to send"))
+                .fileDialogMessage(Text(localized("app.dialog.chooseFilesToSend")))
                 .fileImporter(
                     isPresented: $isFolderImporterPresented,
                     allowedContentTypes: [.folder],
@@ -56,7 +56,7 @@ struct LocalDropApp: App {
                     onCompletion: handleImportedItems,
                     onCancellation: {}
                 )
-                .fileDialogMessage(Text("Choose folders to send"))
+                .fileDialogMessage(Text(localized("app.dialog.chooseFoldersToSend")))
                 .sheet(isPresented: $isTextEntryPresented) {
                     SendTextEntrySheet(
                         initialText: textEntryDraft,
@@ -81,57 +81,63 @@ struct LocalDropApp: App {
         .windowResizability(.contentMinSize)
         .windowToolbarStyle(.unified)
         .commands {
+            CommandGroup(replacing: .appInfo) {
+                Button(localized("app.about.title")) {
+                    openAbout()
+                }
+            }
+
             CommandGroup(replacing: .newItem) {
-                Button("Send File…") {
+                Button(localized("menubar.sendFile")) {
                     beginFileSend()
                 }
                 .keyboardShortcut("o", modifiers: [.command])
 
-                Button("Send Folder…") {
+                Button(localized("menubar.sendFolder")) {
                     beginFolderSend()
                 }
                 .keyboardShortcut("o", modifiers: [.command, .shift])
 
-                Button("Send Text…") {
+                Button(localized("app.menu.sendText")) {
                     beginTextSend()
                 }
-                    .keyboardShortcut("t", modifiers: [.command])
+                .keyboardShortcut("t", modifiers: [.command])
 
                 Divider()
 
-                Button("Clear History") {
+                Button(localized("app.menu.clearHistory")) {
                     container.clearHistory()
                 }
                 .keyboardShortcut(.delete, modifiers: [.command])
             }
 
             CommandGroup(replacing: .appSettings) {
-                Button("Preferences…") {
+                Button(localized("menubar.preferences")) {
                     openPreferences()
                 }
                 .keyboardShortcut(",", modifiers: [.command])
             }
 
-            CommandMenu("View") {
-                Button("Receive") {
+            CommandMenu(localized("app.menu.view")) {
+                Button(localized("screen.receive.title")) {
                     container.showReceive()
                     openLocalDrop()
                 }
                 .keyboardShortcut("1", modifiers: [.command])
 
-                Button("Send") {
+                Button(localized("screen.send.title")) {
                     container.showSend()
                     openLocalDrop()
                 }
                 .keyboardShortcut("2", modifiers: [.command])
 
-                Button("History") {
+                Button(localized("screen.history.title")) {
                     container.showHistory()
                     openLocalDrop()
                 }
                 .keyboardShortcut("3", modifiers: [.command])
 
-                Button("Settings") {
+                Button(localized("screen.settings.title")) {
                     container.showSettings()
                     openLocalDrop()
                 }
@@ -139,11 +145,17 @@ struct LocalDropApp: App {
             }
 
             CommandGroup(replacing: .help) {
-                Link("LocalDrop Help", destination: URL(string: "https://localsend.org")!)
-                Link("LocalSend Protocol Docs", destination: URL(string: "https://github.com/localsend/protocol")!)
-                Link("Report an Issue", destination: URL(string: "https://github.com/localsend/localsend/issues")!)
+                Link(localized("app.help.localDropHelp"), destination: URL(string: "https://localsend.org")!)
+                Link(localized("app.help.protocolDocs"), destination: URL(string: "https://github.com/localsend/protocol")!)
+                Link(localized("app.help.reportIssue"), destination: URL(string: "https://github.com/localsend/localsend/issues")!)
             }
         }
+
+        Window(localized("app.about.title"), id: "about") {
+            AboutLocalDropView()
+        }
+        .defaultSize(width: 520, height: 560)
+        .windowResizability(.contentSize)
 
         MenuBarExtra {
             container.menuBarExtraView(
@@ -157,9 +169,13 @@ struct LocalDropApp: App {
                 )
             )
         } label: {
-            Label("LocalDrop", systemImage: container.menuStatusSymbol)
+            Label(localized("root.localDrop"), systemImage: container.menuStatusSymbol)
         }
         .menuBarExtraStyle(.menu)
+    }
+
+    private func localized(_ key: String) -> String {
+        FeatureTransferLocalization.string(forKey: key)
     }
 
     private func showFileImporter() {
@@ -199,6 +215,10 @@ struct LocalDropApp: App {
 
     private func openLocalDrop() {
         openWindow(id: "main")
+    }
+
+    private func openAbout() {
+        openWindow(id: "about")
     }
 
     private func openPreferences() {
@@ -295,5 +315,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // When the user opted into minimize-to-menu-bar, keep the process alive on last
         // window close so the MenuBarExtra stays reachable; otherwise quit as before.
         !(minimizeToMenuBarProvider?() ?? false)
+    }
+}
+
+private struct AboutLocalDropView: View {
+    private let termsOfUseURL = URL(string: "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/")!
+    private let privacyPolicyURL = URL(string: "https://localsend.org/privacy")!
+    private let supportLocalSendURL = URL(string: "https://localsend.org/donate")!
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                HStack(alignment: .top, spacing: 16) {
+                    Image(nsImage: NSApp.applicationIconImage)
+                        .resizable()
+                        .frame(width: 72, height: 72)
+                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(FeatureTransferLocalization.string(forKey: "root.localDrop"))
+                            .font(.system(size: 28, weight: .semibold))
+                        Text(FeatureTransferLocalization.string(forKey: "app.about.tagline"))
+                            .foregroundStyle(.secondary)
+                        Text(FeatureTransferLocalization.string(forKey: "app.about.exclusiveMacOS"))
+                            .fontWeight(.semibold)
+                    }
+                }
+
+                Group {
+                    Text(FeatureTransferLocalization.string(forKey: "app.about.description1"))
+                    Text(FeatureTransferLocalization.string(forKey: "app.about.description2"))
+                    Text(FeatureTransferLocalization.string(forKey: "app.about.description3"))
+                }
+                .fixedSize(horizontal: false, vertical: true)
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Link(FeatureTransferLocalization.string(forKey: "app.about.termsOfUse"), destination: termsOfUseURL)
+                    Link(FeatureTransferLocalization.string(forKey: "app.about.privacyPolicy"), destination: privacyPolicyURL)
+                    Link(FeatureTransferLocalization.string(forKey: "app.about.supportLocalSend"), destination: supportLocalSendURL)
+                }
+            }
+            .padding(24)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 }

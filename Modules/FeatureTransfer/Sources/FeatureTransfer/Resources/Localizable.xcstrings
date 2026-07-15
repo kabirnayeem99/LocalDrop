@@ -1,6 +1,9 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "" : {
+
+    },
     "accent.abbasidObsidian" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1016,6 +1019,9 @@
         }
       }
     },
+    "Complete" : {
+
+    },
     "device.nearby" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1306,64 +1312,6 @@
         }
       }
     },
-    "feedback.linkRequiresStagedItems" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ar" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "جهّز ملفات قبل المشاركة عبر الرابط"
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Stage files before sharing via link."
-          }
-        },
-        "id" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Siapkan file sebelum berbagi lewat tautan."
-          }
-        },
-        "ur" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "لنک کے ذریعے شیئر کرنے سے پہلے فائلیں تیار کریں۔"
-          }
-        }
-      }
-    },
-    "feedback.sendRequiresStagedItems" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ar" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "جهّز ملفات قبل الإرسال"
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Stage files before sending."
-          }
-        },
-        "id" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Siapkan file sebelum mengirim."
-          }
-        },
-        "ur" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "بھیجنے سے پہلے فائلیں تیار کریں۔"
-          }
-        }
-      }
-    },
     "feedback.fileUnavailable" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1509,6 +1457,35 @@
         }
       }
     },
+    "feedback.linkRequiresStagedItems" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "جهّز ملفات قبل المشاركة عبر الرابط"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stage files before sharing via link."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Siapkan file sebelum berbagi lewat tautan."
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "لنک کے ذریعے شیئر کرنے سے پہلے فائلیں تیار کریں۔"
+          }
+        }
+      }
+    },
     "feedback.saveLocationChanged" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1534,6 +1511,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "محفوظ کرنے کی جگہ تبدیل ہو گئی"
+          }
+        }
+      }
+    },
+    "feedback.sendRequiresStagedItems" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "جهّز ملفات قبل الإرسال"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stage files before sending."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Siapkan file sebelum mengirim."
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "بھیجنے سے پہلے فائلیں تیار کریں۔"
           }
         }
       }
@@ -2088,6 +2094,9 @@
           }
         }
       }
+    },
+    "In Progress" : {
+
     },
     "incomingRequest.accept" : {
       "extractionState" : "manual",
@@ -3706,6 +3715,296 @@
         }
       }
     },
+    "send.mode.close" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "إغلاق"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Close"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tutup"
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "بند کریں"
+          }
+        }
+      }
+    },
+    "send.mode.explanation" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "شرح"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Explanation"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Penjelasan"
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "وضاحت"
+          }
+        }
+      }
+    },
+    "send.mode.help" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "اختر ما إذا كان LocalDrop سيرسل إلى جهاز واحد أو عدة أجهزة أو سيبدأ المشاركة عبر الرابط."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose whether LocalDrop sends to one device, multiple devices, or starts link sharing."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pilih apakah LocalDrop mengirim ke satu perangkat, beberapa perangkat, atau memulai berbagi tautan."
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "منتخب کریں کہ LocalDrop ایک آلہ، کئی آلات یا لنک شیئرنگ شروع کرے۔"
+          }
+        }
+      }
+    },
+    "send.mode.link" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "المشاركة عبر الرابط"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Share via link"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bagikan lewat tautan"
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "لنک کے ذریعے شیئر کریں"
+          }
+        }
+      }
+    },
+    "send.mode.linkDescription" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "تُظهر المشاركة عبر الرابط العناصر المجهّزة عبر رابط محلي مؤقت للمتصفحات أو الأجهزة البعيدة."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Share via link exposes the staged items over a temporary local link for browsers or remote devices."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bagikan lewat tautan menampilkan item yang disiapkan melalui tautan lokal sementara untuk browser atau perangkat jarak jauh."
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "لنک کے ذریعے شیئر تیار شدہ آئٹمز کو براؤزر یا دور کے آلات کے لیے عارضی مقامی لنک پر مہیا کرتا ہے۔"
+          }
+        }
+      }
+    },
+    "send.mode.multiple" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "عدة مستلمين"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Multiple recipients"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Beberapa penerima"
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "متعدد وصول کنندگان"
+          }
+        }
+      }
+    },
+    "send.mode.multipleDescription" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "يبقي وضع عدة مستلمين جلسات الإرسال مفتوحة لكل جهاز حتى تتمكن من استهداف عدة أجهزة قريبة."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Multiple recipients keeps sends open per device so you can target several nearby devices."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Beberapa penerima mempertahankan pengiriman per perangkat agar Anda dapat menargetkan beberapa perangkat terdekat."
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "متعدد وصول کنندگان موڈ ہر آلے کے لیے بھیجنے کے سیشن کھلے رکھتا ہے تاکہ آپ کئی قریبی آلات کو ہدف بنا سکیں۔"
+          }
+        }
+      }
+    },
+    "send.mode.sheetTitle" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "أوضاع الإرسال"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Send Modes"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mode pengiriman"
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "بھیجنے کے موڈز"
+          }
+        }
+      }
+    },
+    "send.mode.single" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "مستلم واحد"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Single recipient"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Satu penerima"
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ایک وصول کنندہ"
+          }
+        }
+      }
+    },
+    "send.mode.singleDescription" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "يرسل المستلم الواحد العناصر المجهّزة إلى جهاز واحد في المقدمة."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Single recipient sends the current staged items to one device in the foreground."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Satu penerima mengirim item yang sedang disiapkan ke satu perangkat di latar depan."
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ایک وصول کنندہ موجودہ تیار شدہ آئٹمز کو پیش منظر میں ایک آلے تک بھیجتا ہے۔"
+          }
+        }
+      }
+    },
     "send.nearbyDevices" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -4050,296 +4349,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "انتخاب"
-          }
-        }
-      }
-    },
-    "send.mode.close" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ar" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "إغلاق"
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Close"
-          }
-        },
-        "id" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Tutup"
-          }
-        },
-        "ur" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "بند کریں"
-          }
-        }
-      }
-    },
-    "send.mode.explanation" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ar" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "شرح"
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Explanation"
-          }
-        },
-        "id" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Penjelasan"
-          }
-        },
-        "ur" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "وضاحت"
-          }
-        }
-      }
-    },
-    "send.mode.help" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ar" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "اختر ما إذا كان LocalDrop سيرسل إلى جهاز واحد أو عدة أجهزة أو سيبدأ المشاركة عبر الرابط."
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Choose whether LocalDrop sends to one device, multiple devices, or starts link sharing."
-          }
-        },
-        "id" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Pilih apakah LocalDrop mengirim ke satu perangkat, beberapa perangkat, atau memulai berbagi tautan."
-          }
-        },
-        "ur" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "منتخب کریں کہ LocalDrop ایک آلہ، کئی آلات یا لنک شیئرنگ شروع کرے۔"
-          }
-        }
-      }
-    },
-    "send.mode.link" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ar" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "المشاركة عبر الرابط"
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Share via link"
-          }
-        },
-        "id" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Bagikan lewat tautan"
-          }
-        },
-        "ur" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "لنک کے ذریعے شیئر کریں"
-          }
-        }
-      }
-    },
-    "send.mode.linkDescription" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ar" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "تُظهر المشاركة عبر الرابط العناصر المجهّزة عبر رابط محلي مؤقت للمتصفحات أو الأجهزة البعيدة."
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Share via link exposes the staged items over a temporary local link for browsers or remote devices."
-          }
-        },
-        "id" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Bagikan lewat tautan menampilkan item yang disiapkan melalui tautan lokal sementara untuk browser atau perangkat jarak jauh."
-          }
-        },
-        "ur" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "لنک کے ذریعے شیئر تیار شدہ آئٹمز کو براؤزر یا دور کے آلات کے لیے عارضی مقامی لنک پر مہیا کرتا ہے۔"
-          }
-        }
-      }
-    },
-    "send.mode.multiple" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ar" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "عدة مستلمين"
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Multiple recipients"
-          }
-        },
-        "id" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Beberapa penerima"
-          }
-        },
-        "ur" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "متعدد وصول کنندگان"
-          }
-        }
-      }
-    },
-    "send.mode.multipleDescription" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ar" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "يبقي وضع عدة مستلمين جلسات الإرسال مفتوحة لكل جهاز حتى تتمكن من استهداف عدة أجهزة قريبة."
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Multiple recipients keeps sends open per device so you can target several nearby devices."
-          }
-        },
-        "id" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Beberapa penerima mempertahankan pengiriman per perangkat agar Anda dapat menargetkan beberapa perangkat terdekat."
-          }
-        },
-        "ur" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "متعدد وصول کنندگان موڈ ہر آلے کے لیے بھیجنے کے سیشن کھلے رکھتا ہے تاکہ آپ کئی قریبی آلات کو ہدف بنا سکیں۔"
-          }
-        }
-      }
-    },
-    "send.mode.sheetTitle" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ar" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "أوضاع الإرسال"
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Send Modes"
-          }
-        },
-        "id" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Mode pengiriman"
-          }
-        },
-        "ur" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "بھیجنے کے موڈز"
-          }
-        }
-      }
-    },
-    "send.mode.single" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ar" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "مستلم واحد"
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Single recipient"
-          }
-        },
-        "id" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Satu penerima"
-          }
-        },
-        "ur" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ایک وصول کنندہ"
-          }
-        }
-      }
-    },
-    "send.mode.singleDescription" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ar" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "يرسل المستلم الواحد العناصر المجهّزة إلى جهاز واحد في المقدمة."
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Single recipient sends the current staged items to one device in the foreground."
-          }
-        },
-        "id" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Satu penerima mengirim item yang sedang disiapkan ke satu perangkat di latar depan."
-          }
-        },
-        "ur" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ایک وصول کنندہ موجودہ تیار شدہ آئٹمز کو پیش منظر میں ایک آلے تک بھیجتا ہے۔"
           }
         }
       }
@@ -5678,6 +5687,64 @@
         }
       }
     },
+    "settings.section.network" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "الشبكة"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Network"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Jaringan"
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "نیٹ ورک"
+          }
+        }
+      }
+    },
+    "settings.section.receiving" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "الاستلام"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Receiving"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Menerima"
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "وصولی"
+          }
+        }
+      }
+    },
     "settings.section.sending" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -5707,31 +5774,31 @@
         }
       }
     },
-    "settings.section.network" : {
+    "settings.securityChanged" : {
       "extractionState" : "manual",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "الشبكة"
+            "value" : "تم تغيير إعداد الأمان"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Network"
+            "value" : "Security setting changed"
           }
         },
         "id" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Jaringan"
+            "value" : "Pengaturan keamanan diubah"
           }
         },
         "ur" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "نیٹ ورک"
+            "value" : "سیکیورٹی ترتیب تبدیل ہو گئی"
           }
         }
       }
@@ -5790,64 +5857,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "جب لنک شیئرنگ فعال ہو تو آنے والی لنک شیئر ڈاؤن لوڈز کو فوراً قبول کریں۔"
-          }
-        }
-      }
-    },
-    "settings.section.receiving" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ar" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "الاستلام"
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Receiving"
-          }
-        },
-        "id" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Menerima"
-          }
-        },
-        "ur" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "وصولی"
-          }
-        }
-      }
-    },
-    "settings.securityChanged" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "ar" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "تم تغيير إعداد الأمان"
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Security setting changed"
-          }
-        },
-        "id" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Pengaturan keamanan diubah"
-          }
-        },
-        "ur" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "سیکیورٹی ترتیب تبدیل ہو گئی"
           }
         }
       }

@@ -1,8 +1,7 @@
 import AppKit
-import CoreText
-import SwiftUI
-import FeatureTransfer
 import Darwin
+import FeatureTransfer
+import SwiftUI
 import UniformTypeIdentifiers
 
 @main
@@ -14,10 +13,10 @@ struct LocalDropApp: App {
     @State private var isFolderImporterPresented = false
     @State private var isTextEntryPresented = false
     @State private var textEntryDraft = ""
+    @State private var shouldStartInitialContainer: Bool
+    @State private var shouldBootstrapLiveContainer: Bool
 
     init() {
-        AppFontRegistrar.registerBundledFonts()
-
         let arguments = ProcessInfo.processInfo.arguments
         let isUITesting = arguments.contains("--ui-testing")
         let enableIncomingPINForUITests = arguments.contains("--ui-testing-incoming-pin-enabled")
@@ -31,13 +30,12 @@ struct LocalDropApp: App {
             }
             initialContainer = container
         } else {
-            initialContainer = .live()
+            initialContainer = .bootstrap()
         }
-        initialContainer.recordLaunchStarted(mode: isUITesting ? "ui_testing" : "standard")
 
-        _container = State(
-            initialValue: initialContainer
-        )
+        _container = State(initialValue: initialContainer)
+        _shouldStartInitialContainer = State(initialValue: isUITesting)
+        _shouldBootstrapLiveContainer = State(initialValue: isUITesting == false)
     }
 
     var body: some Scene {
@@ -70,7 +68,13 @@ struct LocalDropApp: App {
                     appDelegate.minimizeToMenuBarProvider = {
                         MainActor.assumeIsolated { container.shouldMinimizeToMenuBar }
                     }
-                    await container.startIfNeeded()
+                    if shouldBootstrapLiveContainer {
+                        await loadLiveContainer()
+                    } else if shouldStartInitialContainer {
+                        shouldStartInitialContainer = false
+                        container.recordLaunchStarted(mode: "ui_testing")
+                        await container.startIfNeeded()
+                    }
                 }
         }
         .defaultSize(width: 1120, height: 704)
@@ -251,6 +255,19 @@ struct LocalDropApp: App {
         }
     }
 
+    @MainActor
+    private func loadLiveContainer() async {
+        guard shouldBootstrapLiveContainer else { return }
+        shouldBootstrapLiveContainer = false
+
+        container = await TransferFeatureContainer.liveAsync()
+        appDelegate.minimizeToMenuBarProvider = {
+            MainActor.assumeIsolated { container.shouldMinimizeToMenuBar }
+        }
+        container.recordLaunchStarted(mode: "standard")
+        await container.startIfNeeded()
+    }
+
     private static func seedUITestStagedBatch(into container: TransferFeatureContainer) {
         let root = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("LocalDropUITests", isDirectory: true)
@@ -268,22 +285,6 @@ struct LocalDropApp: App {
             return url
         }
         container.stageImportedItems(urls)
-    }
-}
-
-private enum AppFontRegistrar {
-    static func registerBundledFonts() {
-        guard let fontsDirectory = Bundle.main.resourceURL?.appendingPathComponent("Fonts", isDirectory: true),
-              let fontURLs = try? FileManager.default.contentsOfDirectory(
-                at: fontsDirectory,
-                includingPropertiesForKeys: nil
-              ) else {
-            return
-        }
-
-        for url in fontURLs where url.pathExtension.lowercased() == "ttf" {
-            CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
-        }
     }
 }
 

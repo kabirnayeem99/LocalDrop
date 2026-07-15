@@ -1,5 +1,6 @@
 import AppLogging
 import AppKit
+import Dispatch
 import Foundation
 import LocalSendKit
 import SwiftUI
@@ -188,6 +189,91 @@ public final class TransferFeatureContainer {
         userDefaults: UserDefaults = .standard,
         fileManager: FileManager = .default
     ) -> TransferFeatureContainer {
+        makeLiveContainer(from: buildLiveBootstrap(userDefaults: userDefaults, fileManager: fileManager))
+    }
+
+    public static func liveAsync(
+        userDefaults: UserDefaults = .standard,
+        fileManager: FileManager = .default
+    ) async -> TransferFeatureContainer {
+        let bootstrap = await prepareLiveBootstrap(userDefaults: userDefaults, fileManager: fileManager)
+        return makeLiveContainer(from: bootstrap)
+    }
+
+    public static func bootstrap(
+        fileManager: FileManager = .default
+    ) -> TransferFeatureContainer {
+        let saveLocation = defaultSaveLocation(fileManager: fileManager)
+        let deviceName = Host.current().localizedName ?? "LocalDrop Mac"
+        let snapshot = TransferSettingsSnapshot.default(deviceName: deviceName, saveLocation: saveLocation)
+        let store = TransferFeatureStore(
+            runtime: NoopTransferRuntime(),
+            settingsPersistence: NoopSettingsPersistence(snapshot: snapshot),
+            historyPersistence: InMemoryHistoryPersistence(entries: []),
+            loginItemManaging: NoopLoginItemManager(),
+            snapshot: snapshot,
+            logger: .disabled()
+        )
+        return TransferFeatureContainer(store: store, logger: .disabled())
+    }
+
+    public static func testing(
+        requirePIN: Bool = false,
+        incomingPIN: String = "123456"
+    ) -> TransferFeatureContainer {
+        var snapshot = TransferSettingsSnapshot.default(
+            deviceName: "LocalDrop UI Test Mac",
+            saveLocation: URL(fileURLWithPath: NSTemporaryDirectory())
+        )
+        snapshot.protocolSettings.requirePIN = requirePIN
+        snapshot.protocolSettings.incomingPIN = incomingPIN
+        let store = TransferFeatureStore(
+            runtime: NoopTransferRuntime(),
+            settingsPersistence: NoopSettingsPersistence(snapshot: snapshot),
+            historyPersistence: InMemoryHistoryPersistence(),
+            loginItemManaging: NoopLoginItemManager(),
+            snapshot: snapshot,
+            logger: .disabled()
+        )
+        store.runtimeStatusText = FeatureTransferLocalization.string(forKey: "runtime.discoverable")
+        store.isRuntimeAvailable = true
+        return TransferFeatureContainer(store: store, logger: .disabled())
+    }
+
+    private static func makeLiveContainer(from bootstrap: LiveBootstrap) -> TransferFeatureContainer {
+        let store = TransferFeatureStore(
+            runtime: bootstrap.runtime ?? NoopTransferRuntime(),
+            settingsPersistence: bootstrap.settingsPersistence,
+            historyPersistence: bootstrap.historyPersistence,
+            loginItemManaging: bootstrap.loginItemManaging,
+            snapshot: bootstrap.snapshot,
+            logger: bootstrap.logger
+        )
+
+        if let error = bootstrap.error {
+            store.lastErrorMessage = error.localizedDescription
+            store.runtimeStatusText = FeatureTransferLocalization.string(forKey: "runtime.unavailable")
+        }
+
+        return TransferFeatureContainer(store: store, logger: bootstrap.logger)
+    }
+
+    private nonisolated static func prepareLiveBootstrap(
+        userDefaults: UserDefaults,
+        fileManager: FileManager
+    ) async -> LiveBootstrap {
+        let input = LiveBootstrapInput(userDefaults: userDefaults, fileManager: fileManager)
+        return await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                continuation.resume(returning: buildLiveBootstrap(userDefaults: input.userDefaults, fileManager: input.fileManager))
+            }
+        }
+    }
+
+    private nonisolated static func buildLiveBootstrap(
+        userDefaults: UserDefaults,
+        fileManager: FileManager
+    ) -> LiveBootstrap {
         let baseDirectory = applicationSupportDirectory(fileManager: fileManager)
         let logger = makeLogger(baseDirectory: baseDirectory)
         logger.emit(level: .info, event: "app.launch.started", scope: "TransferFeatureContainer")
@@ -204,8 +290,6 @@ public final class TransferFeatureContainer {
             fileManager: fileManager
         )
         let loginItemManaging = SMAppServiceLoginItemManager()
-        // The user may have added/removed the login item directly via System Settings,
-        // so trust the actual registration state over the persisted bool.
         let actuallyLaunchesAtLogin = loginItemManaging.isRegistered
         if snapshot.launchAtLogin != actuallyLaunchesAtLogin {
             snapshot.launchAtLogin = actuallyLaunchesAtLogin
@@ -261,15 +345,15 @@ public final class TransferFeatureContainer {
                 makeComponents: makeComponents,
                 logger: logger
             )
-            let store = TransferFeatureStore(
-                runtime: runtime,
+            return LiveBootstrap(
+                logger: logger,
                 settingsPersistence: settingsPersistence,
                 historyPersistence: historyPersistence,
                 loginItemManaging: loginItemManaging,
                 snapshot: snapshot,
-                logger: logger
+                runtime: runtime,
+                error: nil
             )
-            return TransferFeatureContainer(store: store, logger: logger)
         } catch {
             logger.emit(
                 level: .critical,
@@ -281,45 +365,19 @@ public final class TransferFeatureContainer {
                     .string("app.component", "NoopTransferRuntime")
                 ]
             )
-            let runtime = NoopTransferRuntime()
-            let store = TransferFeatureStore(
-                runtime: runtime,
+            return LiveBootstrap(
+                logger: logger,
                 settingsPersistence: settingsPersistence,
                 historyPersistence: historyPersistence,
                 loginItemManaging: loginItemManaging,
                 snapshot: snapshot,
-                logger: logger
+                runtime: nil,
+                error: error
             )
-            store.lastErrorMessage = error.localizedDescription
-            store.runtimeStatusText = FeatureTransferLocalization.string(forKey: "runtime.unavailable")
-            return TransferFeatureContainer(store: store, logger: logger)
         }
     }
 
-    public static func testing(
-        requirePIN: Bool = false,
-        incomingPIN: String = "123456"
-    ) -> TransferFeatureContainer {
-        var snapshot = TransferSettingsSnapshot.default(
-            deviceName: "LocalDrop UI Test Mac",
-            saveLocation: URL(fileURLWithPath: NSTemporaryDirectory())
-        )
-        snapshot.protocolSettings.requirePIN = requirePIN
-        snapshot.protocolSettings.incomingPIN = incomingPIN
-        let store = TransferFeatureStore(
-            runtime: NoopTransferRuntime(),
-            settingsPersistence: NoopSettingsPersistence(snapshot: snapshot),
-            historyPersistence: InMemoryHistoryPersistence(),
-            loginItemManaging: NoopLoginItemManager(),
-            snapshot: snapshot,
-            logger: .disabled()
-        )
-        store.runtimeStatusText = FeatureTransferLocalization.string(forKey: "runtime.discoverable")
-        store.isRuntimeAvailable = true
-        return TransferFeatureContainer(store: store, logger: .disabled())
-    }
-
-    private static func makeLogger(baseDirectory: URL) -> AppLogger {
+    private nonisolated static func makeLogger(baseDirectory: URL) -> AppLogger {
         let launchID = UUID().uuidString.lowercased()
         let logsDirectory = baseDirectory.appendingPathComponent("Logs", isDirectory: true)
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
@@ -354,23 +412,23 @@ public final class TransferFeatureContainer {
         )
     }
 
-    private static func applicationSupportDirectory(fileManager: FileManager) -> URL {
+    private nonisolated static func applicationSupportDirectory(fileManager: FileManager) -> URL {
         let root = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSTemporaryDirectory())
         return root.appendingPathComponent("LocalDrop", isDirectory: true)
     }
 
-    private static func defaultSaveLocation(fileManager: FileManager) -> URL {
+    private nonisolated static func defaultSaveLocation(fileManager: FileManager) -> URL {
         fileManager.urls(for: .downloadsDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Downloads", isDirectory: true)
     }
 
-    private static func outboundTextDirectory(fileManager: FileManager) -> URL {
+    private nonisolated static func outboundTextDirectory(fileManager: FileManager) -> URL {
         applicationSupportDirectory(fileManager: fileManager)
             .appendingPathComponent("OutgoingText", isDirectory: true)
     }
 
-    private static func generatedTextFilename() -> String {
+    private nonisolated static func generatedTextFilename() -> String {
         "LocalDrop Text \(UUID().uuidString.lowercased()).txt"
     }
 
@@ -404,6 +462,21 @@ public enum ClipboardTextStagingResult: Equatable {
     case staged
     case requiresTextEntry
     case failed
+}
+
+private struct LiveBootstrap: @unchecked Sendable {
+    let logger: AppLogger
+    let settingsPersistence: SettingsPersistenceAdapter
+    let historyPersistence: HistoryPersistenceAdapter
+    let loginItemManaging: SMAppServiceLoginItemManager
+    let snapshot: TransferSettingsSnapshot
+    let runtime: LocalSendRuntimeAdapter?
+    let error: (any Error)?
+}
+
+private struct LiveBootstrapInput: @unchecked Sendable {
+    let userDefaults: UserDefaults
+    let fileManager: FileManager
 }
 
 private extension ProcessInfo {

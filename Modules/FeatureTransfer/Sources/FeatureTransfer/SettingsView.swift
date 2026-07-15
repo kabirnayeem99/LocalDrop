@@ -64,7 +64,7 @@ struct SettingsView: View {
                     .accessibilityIdentifier("settings-require-pin-toggle")
                     .help(Text(FeatureTransferLocalization.resource("settings.requirePINHelp")))
                 LabeledContent(FeatureTransferLocalization.string(forKey: "settings.incomingPIN")) {
-                    VStack(alignment: .trailing, spacing: Spacing.xxs) {
+                    VStack(alignment: .leading, spacing: Spacing.xxs) {
                         HStack(spacing: Spacing.xs) {
                             incomingPINField
 
@@ -73,7 +73,9 @@ struct SettingsView: View {
                             }
                             .disabled(store.requirePIN == false)
                             .accessibilityIdentifier("settings-incoming-pin-visibility")
+                        }
 
+                        HStack(spacing: Spacing.xs) {
                             Button(FeatureTransferLocalization.resource("settings.apply")) {
                                 applyIncomingPIN()
                             }
@@ -101,6 +103,7 @@ struct SettingsView: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 Toggle(FeatureTransferLocalization.resource("settings.autoAcceptFavorites"), isOn: $store.autoAcceptFavorites)
                     .help(Text(FeatureTransferLocalization.resource("settings.autoAcceptFavoritesHelp")))

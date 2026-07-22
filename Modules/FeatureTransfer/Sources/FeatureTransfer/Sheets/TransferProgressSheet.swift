@@ -7,13 +7,12 @@ struct TransferProgressSheet: View {
 
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     @Environment(\.appReducesMotion) private var appReduceMotion
+    @Environment(\.accentTheme) private var accentTheme
     @State private var displayedOverallProgress = 0.0
     @State private var animationSeed = 0
 
     private var reduceMotion: Bool { systemReduceMotion || appReduceMotion }
-    private var directionTint: Color {
-        progress.direction == .sending ? SemanticColor.sending : SemanticColor.receiving
-    }
+    private var directionTint: Color { accentTheme.primary }
     private var isComplete: Bool { progress.status == .completed }
     private var overallProgressTarget: Double? { progress.overallProgressValue }
 
@@ -30,10 +29,11 @@ struct TransferProgressSheet: View {
             .padding(.top, Spacing.md)
             .padding(.bottom, Spacing.lg)
 
+            overallSection
+                .padding(.horizontal, Spacing.xs)
+
             ScrollView {
                 VStack(alignment: .leading, spacing: Spacing.md) {
-                    overallSection
-
                     ForEach(progress.files) { file in
                         TransferFileProgressRow(
                             fileProgress: file,

@@ -9,8 +9,7 @@ struct LocalDropApp: App {
     @Environment(\.openWindow) private var openWindow
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var container: TransferFeatureContainer
-    @State private var isFileImporterPresented = false
-    @State private var isFolderImporterPresented = false
+    @State private var importerKind: ImporterKind?
     @State private var isTextEntryPresented = false
     @State private var textEntryDraft = ""
     @State private var shouldStartInitialContainer: Bool
@@ -43,21 +42,22 @@ struct LocalDropApp: App {
         WindowGroup(id: "main") {
             container.applyingCurrentLanguageOverride(to: container.rootView(sendEntryActions: sendEntryActions))
                 .fileImporter(
-                    isPresented: $isFileImporterPresented,
-                    allowedContentTypes: [.item],
+                    isPresented: Binding(
+                        get: { importerKind != nil },
+                        set: { presented in if !presented { importerKind = nil } }
+                    ),
+                    allowedContentTypes: importerKind == .folder ? [.folder] : [.item],
                     allowsMultipleSelection: true,
                     onCompletion: handleImportedItems,
                     onCancellation: {}
                 )
-                .fileDialogMessage(Text(localized("app.dialog.chooseFilesToSend")))
-                .fileImporter(
-                    isPresented: $isFolderImporterPresented,
-                    allowedContentTypes: [.folder],
-                    allowsMultipleSelection: true,
-                    onCompletion: handleImportedItems,
-                    onCancellation: {}
+                .fileDialogMessage(
+                    Text(
+                        importerKind == .folder
+                            ? localized("app.dialog.chooseFoldersToSend")
+                            : localized("app.dialog.chooseFilesToSend")
+                    )
                 )
-                .fileDialogMessage(Text(localized("app.dialog.chooseFoldersToSend")))
                 .sheet(isPresented: $isTextEntryPresented) {
                     SendTextEntrySheet(
                         initialText: textEntryDraft,
@@ -182,12 +182,12 @@ struct LocalDropApp: App {
 
     private func showFileImporter() {
         container.recordImporterPresented(kind: "file")
-        isFileImporterPresented = true
+        importerKind = .file
     }
 
     private func showFolderImporter() {
         container.recordImporterPresented(kind: "folder")
-        isFolderImporterPresented = true
+        importerKind = .folder
     }
 
     private func beginFileSend() {
@@ -203,15 +203,20 @@ struct LocalDropApp: App {
     }
 
     private func beginTextSend(prefilledText: String = "") {
+        openLocalDrop()
         showTextEntry(prefilledText: prefilledText)
     }
 
+    // Used by SendView's in-window entry actions: the main window is already open and
+    // frontmost here, so these must NOT call openLocalDrop()/openWindow(id:) — doing so
+    // spawns a redundant window (a new tab, once window tabbing is involved) instead of
+    // just performing the action in place.
     private var sendEntryActions: SendEntryActions {
         SendEntryActions(
-            sendFiles: beginFileSend,
-            sendFolders: beginFolderSend,
-            sendText: { beginTextSend() },
-            sendClipboard: sendTextOrClipboard
+            sendFiles: showFileImporter,
+            sendFolders: showFolderImporter,
+            sendText: { showTextEntry() },
+            sendClipboard: stageClipboardTextIfAvailable
         )
     }
 
@@ -240,7 +245,6 @@ struct LocalDropApp: App {
         switch result {
         case .success(let urls):
             container.stageImportedItems(urls)
-            openLocalDrop()
         case .failure(let error):
             container.reportImportFailure(error)
         }
@@ -250,7 +254,6 @@ struct LocalDropApp: App {
         textEntryDraft = prefilledText
         container.showSend()
         isTextEntryPresented = true
-        openLocalDrop()
     }
 
     private func dismissTextSheet() {
@@ -261,20 +264,22 @@ struct LocalDropApp: App {
     private func stageText(_ text: String) {
         if container.stagePastedText(text) {
             dismissTextSheet()
-            openLocalDrop()
+        }
+    }
+
+    private func stageClipboardTextIfAvailable() {
+        container.showSend()
+        switch container.stageClipboardTextIfAvailable() {
+        case .staged, .failed:
+            break
+        case .requiresTextEntry:
+            showTextEntry()
         }
     }
 
     private func sendTextOrClipboard() {
-        container.showSend()
-        switch container.stageClipboardTextIfAvailable() {
-        case .staged:
-            openLocalDrop()
-        case .requiresTextEntry:
-            showTextEntry()
-        case .failed:
-            openLocalDrop()
-        }
+        openLocalDrop()
+        stageClipboardTextIfAvailable()
     }
 
     @MainActor
@@ -311,8 +316,17 @@ struct LocalDropApp: App {
     }
 }
 
+private enum ImporterKind {
+    case file
+    case folder
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var minimizeToMenuBarProvider: (() -> Bool)?
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        NSWindow.allowsAutomaticWindowTabbing = false
+    }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         // When the user opted into minimize-to-menu-bar, keep the process alive on last

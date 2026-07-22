@@ -221,7 +221,7 @@ struct StagedTransferItem: Identifiable, Equatable, Sendable {
 extension Collection where Element == StagedTransferItem {
     var stagedItemCountLabel: String {
         count == 1
-            ? FeatureTransferLocalization.string(forKey: "transfer.stagedItem")
+            ? FeatureTransferLocalization.format("transfer.stagedItem", count)
             : FeatureTransferLocalization.format("transfer.stagedItems", count)
     }
 

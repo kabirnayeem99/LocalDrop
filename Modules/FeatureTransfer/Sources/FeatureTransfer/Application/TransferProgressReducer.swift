@@ -33,8 +33,9 @@ actor TransferProgressReducer {
     func reduce(_ event: TransferProgressRawEvent) -> ActiveTransferProgress {
         let previousState = state
         let previousSnapshot = previousState?.snapshot
+        let isSameTransfer = previousSnapshot?.id == event.transferID
         let startedAt = previousSnapshot.map { snapshot in
-            if snapshot.id == event.transferID, snapshot.attemptID == event.attemptID {
+            if isSameTransfer, snapshot.attemptID == event.attemptID {
                 return snapshot.startedAtMonotonic
             }
             return event.eventMonotonicTime
@@ -42,7 +43,7 @@ actor TransferProgressReducer {
 
         let mergedFiles = mergeFiles(
             rawFiles: event.files,
-            previousFiles: previousSnapshot?.files ?? [],
+            previousFiles: isSameTransfer ? (previousSnapshot?.files ?? []) : [],
             status: status(for: event.kind)
         )
         let totalBytesKnown = resolvedTotalBytesKnown(
@@ -53,13 +54,13 @@ actor TransferProgressReducer {
         let contributedBytes = mergedFiles.reduce(into: Int64.zero) { partialResult, file in
             partialResult += contribution(for: file)
         }
-        let previousDisplayBytes = previousSnapshot?.displayableTransferredBytes ?? 0
+        let previousDisplayBytes = isSameTransfer ? (previousSnapshot?.displayableTransferredBytes ?? 0) : 0
         let displayableTransferredBytes = max(previousDisplayBytes, contributedBytes)
         let actualTransferredBytes = max(event.actualTransferredBytes, 0)
 
         let speedState = reduceSpeed(
-            previous: previousState,
-            currentActualBytes: actualTransferredBytes,
+            previous: isSameTransfer ? previousState : nil,
+            currentDisplayableBytes: displayableTransferredBytes,
             eventTime: event.eventMonotonicTime
         )
         let snapshot = ActiveTransferProgress(
@@ -209,7 +210,7 @@ actor TransferProgressReducer {
 
     private func reduceSpeed(
         previous: State?,
-        currentActualBytes: Int64,
+        currentDisplayableBytes: Int64,
         eventTime: TimeInterval
     ) -> (
         lastSpeedSampleTime: TimeInterval,
@@ -219,11 +220,11 @@ actor TransferProgressReducer {
         lastPositiveByteTime: TimeInterval
     ) {
         guard let previous else {
-            return (eventTime, currentActualBytes, nil, false, eventTime)
+            return (eventTime, currentDisplayableBytes, nil, false, eventTime)
         }
 
         let deltaTime = eventTime - previous.lastSpeedSampleTime
-        let deltaBytes = currentActualBytes - previous.lastSpeedSampleBytes
+        let deltaBytes = currentDisplayableBytes - previous.lastSpeedSampleBytes
         var smoothed = previous.smoothedBytesPerSecond
         var hasSample = previous.hasSpeedSample
         var lastPositiveByteTime = previous.lastPositiveByteTime
@@ -235,7 +236,7 @@ actor TransferProgressReducer {
             lastPositiveByteTime = eventTime
         }
 
-        return (eventTime, currentActualBytes, smoothed, hasSample, lastPositiveByteTime)
+        return (eventTime, currentDisplayableBytes, smoothed, hasSample, lastPositiveByteTime)
     }
 
     private func makeETA(

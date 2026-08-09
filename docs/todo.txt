@@ -1,21 +1,95 @@
 LocalDrop TODO
 
-1. PIN row in Settings should support multiline layout
-Status: completed
+Grouped by theme so each cluster is a plausible single-session unit of work,
+ordered by urgency (most urgent group first; items within a group also
+ordered by urgency).
+
+===============================================================================
+1. PERFORMANCE — lower urgency, no correctness break
+Same transfer/progress pipeline, natural to do together.
+===============================================================================
+
+37. Progress reporting is not throttled
+Status: not started
 
 Problem
-- The incoming PIN controls are still packed into one trailing `HStack` inside `LabeledContent`.
-- On smaller widths or larger localized strings, the row can compress badly.
+- Every 64 KiB read triggers a full actor-hop progress recompute — roughly 16,000 updates for a 1 GB file.
 
 Affected area
-- `Modules/FeatureTransfer/Sources/FeatureTransfer/SettingsView.swift`
+- `Modules/LocalSendKit/Sources/LocalSendKit/NetworkRuntime/LocalSendServerRuntime.swift`
+- `Modules/FeatureTransfer/Sources/FeatureTransfer/Application/TransferProgressReducer.swift`
 
-Implemented
-- Refactored only the `incomingPIN` section layout:
-  - row 1: PIN field + show/hide
-  - row 2: apply + regenerate
-  - row 3: validation / hint text
-- Preserved the existing logic, actions, validation behavior, and accessibility identifiers.
+Recommended next step
+- Coalesce updates on a time or byte threshold.
+- Do not regress the existing model: byte-accurate totals, EWMA speed, and ETA are better than the reference's bare fraction and should be preserved.
+
+38. Unbounded `Task { }` creation on the send progress path
+Status: not started
+
+Problem
+- A `Task { }` is spawned per `didSendBodyData` callback, so task creation is unbounded and unordered.
+- Ordering is currently protected by sequence numbers in the reducer, so this is waste rather than a live bug.
+
+Affected area
+- `Modules/FeatureTransfer/Sources/FeatureTransfer/Infrastructure/LocalSendRuntimeAdapter.swift`
+
+Recommended next step
+- Funnel callbacks through a single serial consumer instead of a task per callback. Pairs naturally with item 37.
+
+39. Per-file receive status derived from `FileManager.fileExists` polling
+Status: not started
+
+Problem
+- Completion is inferred by synchronously stat-ing every destination path rather than from tracked state.
+- It is synchronous I/O inside an actor and it misbehaves if a destination is removed underneath us.
+
+Affected area
+- `Modules/LocalSendKit/Sources/LocalSendKit/Session/TransferSessions.swift`
+
+Recommended next step
+- Track per-file completion explicitly on the session record.
+
+===============================================================================
+2. DEFERRED / BLOCKED ON A DECISION — do not schedule yet
+===============================================================================
+
+50. `FavoriteDevice.aliasOverride` is unreachable
+Status: not started; unblocked now that item 45 has shipped
+
+Problem
+- The model, persistence, and `TransferFeatureStore.displayName(for:)` render path all support an
+  alias override, but nothing can set it: `toggleFavorite` hardcodes `aliasOverride: nil` and
+  there is no rename UI.
+- `lastKnownAlias` is written once at star time and never refreshed.
+- Item 45's favorites list has shipped (`SettingsView.swift`), but it deliberately does not
+  include a rename affordance — an explicit product_manager scope decision to keep that change
+  scoped to the security fix. This item is now only blocked on building the rename UI itself.
+
+Affected area
+- `Modules/FeatureTransfer/Sources/FeatureTransfer/Models/FeatureTransferModels.swift`
+- `Modules/FeatureTransfer/Sources/FeatureTransfer/Application/TransferFeatureStore.swift`
+
+Recommended next step
+- Add rename UI in the existing favorites list and wire it to `aliasOverride`.
+
+51. `QuickSaveMode` copy does not state consent explicitly
+Status: not started; deferred pending a product decision
+
+Problem
+- English labels are off = "Ask Each Time", favorites = "Favorites Only", on = "Downloads".
+- Since item 13's quick-save consent wiring, these modes control whether the accept prompt
+  appears at all, but "Downloads" reads as a destination rather than consent, and "Favorites
+  Only" reads as a restriction rather than auto-accept-for-favorites.
+- The Receive screen picker has no `.help()` and no explanatory footer, unlike
+  `settings.autoAcceptFavorites`, which has `settings.autoAcceptFavoritesHelp`.
+
+Affected area
+- `Modules/FeatureTransfer/Sources/FeatureTransfer/ReceiveView.swift` (~line 33)
+- `Modules/FeatureTransfer/Sources/FeatureTransfer/Resources/Localizable.xcstrings`
+
+Recommended next step
+- Rewrite the copy to state consent explicitly and add help text; requires updating all 17
+  locales. Deferred pending a product decision.
 
 2. Sidebar selection should use the active accent color more clearly
 Status: possible, needs UI decision
@@ -31,6 +105,54 @@ Recommended next step
 - Try a minimal accent-aware selected-state refinement first.
 - Avoid a fully custom list-row selection implementation unless native behavior proves insufficient.
 
+(tech debt) IPv6 link-local discovery is not implemented (zone-id handling itself is resolved)
+Severity: low (IPv6 link-local only)
+
+Problem
+- The zone-id half of this is fixed: `NetworkEndpointAddress.canonicalHost(from:)` now preserves
+  a well-formed `%interface` zone via RFC 6874 encoding (`%25en0`) instead of truncating it, so a
+  link-local host obtained by other means is reachable again.
+- What remains is a missing feature, not a deviation: discovery joins an IPv4 multicast group
+  only, so link-local IPv6 peers are still never *discovered* in the first place.
+
+Affected area
+- `Modules/LocalSendKit/Sources/LocalSendKit/Discovery/Discovery.swift`
+- `Modules/LocalSendKit/Sources/LocalSendKit/NetworkRuntime/LocalSendServerRuntime.swift`
+
+Recommended next step
+- Add an IPv6 multicast join (`MulticastListenerRuntime`/`MulticastAnnouncerRuntime` both
+  currently guard on `IPv4Address`) so link-local peers can be discovered at all.
+
+27. Advertised protocol version is stale
+Status: not started
+
+Problem
+- We advertise `"2.0"`; the current reference advertises `"2.1"`.
+- Behaviourally harmless since routing only branches on `== "1.0"`.
+
+Affected area
+- `Modules/LocalSendKit/Sources/LocalSendKit/LocalSendKit.swift`
+
+Recommended next step
+- Bump the constant once v2.1 behaviours are actually supported, not before.
+
+48. Incoming-request/withdrawal ordering is compensated for, not guaranteed
+Status: not started
+
+Problem
+- The request stream and withdrawal stream are consumed by two independent `Task`s.
+- Ordering is handled by a bounded set of withdrawn request IDs consulted in
+  `handleIncomingRequest`, which is correct but only verified via `Task.yield()` loops in tests
+  because there is no observable "withdrawal recorded" state to await.
+
+Affected area
+- `Modules/FeatureTransfer/Sources/FeatureTransfer/Application/TransferFeatureStore.swift`
+- `Modules/FeatureTransfer/Sources/FeatureTransfer/Infrastructure/LocalSendRuntimeAdapter.swift`
+
+Recommended next step
+- Merge both streams into one enum-tagged stream so ordering is structural rather than
+  compensated.
+
 3. Add GIF / demo video to GitHub
 Status: possible, non-code task
 
@@ -41,3 +163,17 @@ Likely affected areas
 - `README.md`
 - `.github/`
 - Asset folder if a recording is committed
+
+41. Reference core is moving toward protocol v3
+Status: not started; nothing to build now
+
+Problem
+- The Rust `core/` submodule is heading toward protocol v3: token-based auth, `hasWebInterface`, and mandatory client-certificate TLS.
+
+Affected area
+- `localsend-main-app/` (reference submodule)
+- `wiki/LocalSend-Protocol.md`
+
+Recommended next step
+- Nothing to build now. Re-read the v3 surface before planning the next protocol milestone.
+

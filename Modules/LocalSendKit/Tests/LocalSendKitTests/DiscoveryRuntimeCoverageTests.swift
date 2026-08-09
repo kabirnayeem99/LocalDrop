@@ -649,6 +649,96 @@ struct DiscoveryRuntimeCoverageTests {
         }
     }
 
+    @Test func prepareUploadMapsProtocolErrorStatusCodesToDistinctErrors() async throws {
+        // Protocol section 4.1 error table. Anything outside the table keeps the generic
+        // .invalidStatusCode fallback, and 204 stays a successful "no transfer needed" nil.
+        let peer = RemotePeer(host: "127.0.0.1", port: 1, protocolType: .https)
+        let body = PrepareUploadRequest(
+            info: RegisterInfo(alias: "Sender", fingerprint: "S", port: 1, protocolType: .https),
+            files: ["file-1": FileDto(id: "file-1", fileName: "a.txt", size: 3, fileType: "text/plain")]
+        )
+        func client(returning statusCode: Int) -> LocalSendClient {
+            LocalSendClient(transport: InProcessTransport { _ in
+                HTTPResponse(statusCode: statusCode, body: Data())
+            })
+        }
+
+        let expectations: [(Int, LocalSendClientError)] = [
+            (401, .pinRequired),
+            (403, .rejected),
+            (409, .blockedByAnotherSession),
+            (429, .tooManyRequests),
+            (400, .invalidStatusCode(400)),
+            (500, .invalidStatusCode(500))
+        ]
+        for (statusCode, expected) in expectations {
+            await #expect(throws: expected) {
+                _ = try await client(returning: statusCode).prepareUpload(body, to: peer)
+            }
+        }
+
+        // 204 must stay distinct from the 403 rejection: the recipient accepted but chose nothing.
+        #expect(try await client(returning: 204).prepareUpload(body, to: peer) == nil)
+    }
+
+    @Test func nonPrepareUploadRoutesKeepTheGenericStatusCodeError() async throws {
+        // The 4.1 taxonomy is scoped to /prepare-upload. An upload-time 403 means "invalid token
+        // or IP address" and a cancel-time failure is not a rejection, so both must keep
+        // .invalidStatusCode rather than surfacing as .rejected.
+        let peer = RemotePeer(host: "127.0.0.1", port: 1, protocolType: .https)
+        let forbidding = LocalSendClient(transport: InProcessTransport { _ in
+            HTTPResponse(statusCode: 403, body: Data())
+        })
+
+        await #expect(throws: LocalSendClientError.invalidStatusCode(403)) {
+            try await forbidding.upload(Data("x".utf8), sessionId: "s", fileId: "f", token: "t", to: peer)
+        }
+        await #expect(throws: LocalSendClientError.invalidStatusCode(403)) {
+            try await forbidding.cancel(sessionId: "s", to: peer)
+        }
+        await #expect(throws: LocalSendClientError.invalidStatusCode(403)) {
+            _ = try await forbidding.download(fileId: "f", sessionId: "s", from: peer)
+        }
+        await #expect(throws: LocalSendClientError.invalidStatusCode(403)) {
+            _ = try await forbidding.prepareDownload(from: peer)
+        }
+    }
+
+    @Test func pinAttemptTrackerDoesNotCountMissingOrEmptyPINs() async throws {
+        // backlog #12: a PIN-less prepare-upload is unauthorized but must not consume an attempt,
+        // otherwise the sender's first (PIN-less) probe burns a try and only two guesses remain.
+        let tracker = PinAttemptTracker()
+        for _ in 0..<10 {
+            #expect(await tracker.validate(ipAddress: "10.0.0.9", providedPIN: nil, expectedPIN: "123456") == .unauthorized)
+            #expect(await tracker.validate(ipAddress: "10.0.0.9", providedPIN: "", expectedPIN: "123456") == .unauthorized)
+        }
+        #expect(await tracker.attempts(for: "10.0.0.9") == 0)
+
+        #expect(await tracker.validate(ipAddress: "10.0.0.9", providedPIN: "000000", expectedPIN: "123456") == .unauthorized)
+        #expect(await tracker.validate(ipAddress: "10.0.0.9", providedPIN: "000000", expectedPIN: "123456") == .unauthorized)
+        #expect(await tracker.validate(ipAddress: "10.0.0.9", providedPIN: "000000", expectedPIN: "123456") == .rateLimited)
+        #expect(await tracker.attempts(for: "10.0.0.9") == 3)
+    }
+
+    @Test func pinAttemptTrackerNeverResetsTheCounter() async throws {
+        // The reference never clears the counter — not on a correct PIN, and not when no PIN is
+        // configured. A successful guess must not hand an attacker a fresh budget of three tries.
+        let tracker = PinAttemptTracker()
+        _ = await tracker.validate(ipAddress: "10.0.0.10", providedPIN: "wrong", expectedPIN: "123456")
+        _ = await tracker.validate(ipAddress: "10.0.0.10", providedPIN: "wrong", expectedPIN: "123456")
+        #expect(await tracker.attempts(for: "10.0.0.10") == 2)
+
+        #expect(await tracker.validate(ipAddress: "10.0.0.10", providedPIN: "123456", expectedPIN: "123456") == .allowed)
+        #expect(await tracker.attempts(for: "10.0.0.10") == 2)
+
+        #expect(await tracker.validate(ipAddress: "10.0.0.10", providedPIN: nil, expectedPIN: nil) == .allowed)
+        #expect(await tracker.attempts(for: "10.0.0.10") == 2)
+
+        // The third wrong guess still trips the limit, and lockout then survives a correct PIN.
+        #expect(await tracker.validate(ipAddress: "10.0.0.10", providedPIN: "wrong", expectedPIN: "123456") == .rateLimited)
+        #expect(await tracker.validate(ipAddress: "10.0.0.10", providedPIN: "123456", expectedPIN: "123456") == .rateLimited)
+    }
+
     @Test func clientUploadFileAtURLConvenienceOverloadDelegatesCorrectly() async throws {
         // Exercises the public upload(fileAt:byteCount:sessionId:fileId:token:to:)
         // overload, which just forwards to the private upload(_:sessionId:...) with a
@@ -920,11 +1010,11 @@ struct DiscoveryRuntimeCoverageTests {
     }
 
     @Test func receiveSessionUploadOverwritesExistingStagedFile() async throws {
-        // Exercises the FileManager.fileExists -> removeItem -> copyItem branch inside
-        // ReceiveSession.stage(body:to:) for the .file(...) HTTPRequestBody case, which
-        // only triggers when the destination already exists (e.g. a retried chunk of a
-        // multi-file transfer where a previous file happened to already occupy that
-        // exact destination path).
+        // Exercises the occupied-destination branch inside ReceiveSession.stage(body:to:) for the
+        // .file(...) HTTPRequestBody case: `moveItem` refuses to clobber, so the fallback is
+        // `replaceItemAt` (the atomic form of overwrite). This only triggers when the destination
+        // already exists — a retried upload, or a file that appeared after prepare-time collision
+        // resolution.
         let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
@@ -979,6 +1069,69 @@ struct DiscoveryRuntimeCoverageTests {
 
         let overwritten = try Data(contentsOf: destinationURL)
         #expect(overwritten == freshPayload, "Existing file at destination should have been replaced by the new upload")
+        // Item #43: staging MOVES rather than copies, so nothing survives at the source.
+        #expect(FileManager.default.fileExists(atPath: sourceURL.path) == false)
+    }
+
+    /// Item #43: the staged body is consumed by a successful transfer and survives a failed one
+    /// (for the runtime's post-handle unlink to clear), and a failure never leaves a partial
+    /// destination behind.
+    @Test func stagedSourceIsConsumedOnSuccessAndSurvivesAFailedStage() async throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let staging = UploadStagingArea.url(inside: directory)
+        try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+
+        let session = ReceiveSession()
+        guard case .accepted(let response) = try await session.prepare(
+            request: PrepareUploadRequest(
+                info: RegisterInfo(alias: "Sender", fingerprint: "SENDER-FP"),
+                files: [
+                    "ok": FileDto(id: "ok", fileName: "fine.txt", size: 2, fileType: "text/plain"),
+                    "bad": FileDto(id: "bad", fileName: "blocked/deep.txt", size: 2, fileType: "text/plain")
+                ]
+            ),
+            senderIP: "10.0.0.1",
+            policy: .acceptAll,
+            destinationDirectory: directory,
+            sessionIdFactory: { "session" },
+            tokenFactory: { "token-\($0)" }
+        ) else {
+            Issue.record("expected accepted outcome")
+            return
+        }
+
+        // Success: the staged file is renamed away, leaving the staging area empty.
+        let goodSource = staging.appendingPathComponent(UUID().uuidString)
+        try Data("ok".utf8).write(to: goodSource)
+        #expect(try await session.upload(
+            sessionId: response.sessionId,
+            fileId: "ok",
+            token: response.files["ok"],
+            senderIP: "10.0.0.1",
+            body: .file(goodSource, byteCount: 2)
+        ) == .success)
+        #expect(FileManager.default.fileExists(atPath: goodSource.path) == false)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: staging.path).isEmpty)
+        #expect(try Data(contentsOf: directory.appendingPathComponent("fine.txt")) == Data("ok".utf8))
+
+        // Failure: a file occupying the directory path the second file needs.
+        try Data("occupied".utf8).write(to: directory.appendingPathComponent("blocked"))
+        let badSource = staging.appendingPathComponent(UUID().uuidString)
+        try Data("no".utf8).write(to: badSource)
+        await #expect(throws: ReceiveSessionError.destinationDirectoryUnavailable) {
+            _ = try await session.upload(
+                sessionId: response.sessionId,
+                fileId: "bad",
+                token: response.files["bad"],
+                senderIP: "10.0.0.1",
+                body: .file(badSource, byteCount: 2)
+            )
+        }
+        // Still staged — the runtime's post-handle unlink is what removes it — and no partial
+        // destination was created.
+        #expect(FileManager.default.fileExists(atPath: badSource.path))
+        #expect(FileManager.default.fileExists(atPath: directory.appendingPathComponent("blocked/deep.txt").path) == false)
     }
 
     @Test func sendSessionCancelBranches() async throws {

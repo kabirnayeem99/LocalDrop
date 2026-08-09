@@ -118,7 +118,12 @@ struct SendView: View {
                 if nearbyDevicesPresentationState == .results {
                     LazyVGrid(columns: columns, spacing: Spacing.sm) {
                         ForEach(store.nearbyPeers) { device in
-                            DeviceCardView(device: device) {
+                            DeviceCardView(
+                                device: device,
+                                displayName: store.displayName(for: device),
+                                isFavorite: store.isFavorite(device),
+                                toggleFavorite: { store.toggleFavorite(for: device) }
+                            ) {
                                 store.send(to: device.id)
                             }
                         }

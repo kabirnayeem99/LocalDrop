@@ -250,11 +250,25 @@ public final class TransferFeatureContainer {
         return TransferFeatureContainer(store: store, logger: .disabled())
     }
 
+    /// User-facing copy for a bootstrap failure.
+    ///
+    /// A failed keychain read leaves the app with no TLS identity at all, so discovery and every
+    /// transfer are dead until it is resolved. `KeychainCertificateStoreError`'s own description is
+    /// a developer diagnostic ("keychain read failed with OSStatus -25293"); it stays in the logs,
+    /// but what surfaces on screen has to say what happened and what the user can do about it.
+    static func bootstrapFailureMessage(for error: any Error) -> String {
+        guard error is KeychainCertificateStoreError else {
+            return error.localizedDescription
+        }
+        return FeatureTransferLocalization.string(forKey: "error.deviceIdentityUnavailable")
+    }
+
     private static func makeLiveContainer(from bootstrap: LiveBootstrap) -> TransferFeatureContainer {
         let store = TransferFeatureStore(
             runtime: bootstrap.runtime ?? NoopTransferRuntime(),
             settingsPersistence: bootstrap.settingsPersistence,
             historyPersistence: bootstrap.historyPersistence,
+            favoritesPersistence: bootstrap.favoritesPersistence,
             loginItemManaging: bootstrap.loginItemManaging,
             snapshot: bootstrap.snapshot,
             progressThrottleIntervalNanoseconds: 100_000_000,
@@ -262,7 +276,7 @@ public final class TransferFeatureContainer {
         )
 
         if let error = bootstrap.error {
-            store.lastErrorMessage = error.localizedDescription
+            store.lastErrorMessage = bootstrapFailureMessage(for: error)
             store.runtimeStatusText = FeatureTransferLocalization.string(forKey: "runtime.unavailable")
         }
 
@@ -329,6 +343,8 @@ public final class TransferFeatureContainer {
             fileManager: fileManager
         )
         recordBootstrapStep(logger, "history_persistence_init")
+        let favoritesPersistence = FavoritesPersistenceAdapter(userDefaults: userDefaults)
+        recordBootstrapStep(logger, "favorites_persistence_init")
         let loginItemManaging = SMAppServiceLoginItemManager()
         recordBootstrapStep(logger, "login_item_manager_init")
         let actuallyLaunchesAtLogin = loginItemManaging.isRegistered
@@ -357,18 +373,38 @@ public final class TransferFeatureContainer {
 
         do {
             let identityURL = baseDirectory.appendingPathComponent("identity.json")
-            let certificateStore = FileCertificateStore(identityURL: identityURL)
+            // The TLS identity private key lives in the keychain, not in plaintext JSON.
+            // `legacyIdentityURL` points at the pre-keychain file so the first read migrates it
+            // (write -> verified read-back -> delete) without ever destroying the only copy of the
+            // fingerprint that peers TOFU-pin. This closure re-runs on every runtime restart, so the
+            // keychain read happens per restart; migration is idempotent and a no-op after the first.
+            let certificateStore = KeychainCertificateStore(legacyIdentityURL: identityURL)
             let makeComponents: @Sendable (TransferProtocolSettings) throws -> LiveRuntimeComponents = { settings in
                 let identity = try CertificateAuthority(store: certificateStore).loadOrCreateIdentity()
                 let bridge = IncomingTransferRequestBridge()
                 let registerInfo = RegisterInfo(
                     alias: settings.deviceName,
-                    deviceModel: "LocalDrop for macOS",
+                    deviceModel: LocalDeviceIdentity.deviceModel(),
                     deviceType: .desktop,
                     fingerprint: identity.fingerprint,
                     port: settings.tcpPort,
                     protocolType: settings.protocolType,
-                    download: settings.allowDownloads
+                    // Deliberately NOT `settings.allowDownloads`.
+                    //
+                    // `download` on the wire promises section 5's reverse-transfer journey end to
+                    // end: "the receiver opens the browser with the given URL and downloads the
+                    // file". The reference sets it from a LIVE web-send session
+                    // (`receive_controller.dart`: `download: webSendState != null`), not from a
+                    // persistent settings toggle. LocalDrop has no web-send origination flow and
+                    // serves no page at `/`, `/show`, `/main.js` or `/i18n.json`, so advertising
+                    // `true` makes other LocalSend clients offer their user an "open in browser"
+                    // affordance that dead-ends on a 404.
+                    //
+                    // `settings.allowDownloads` still gates whether `/prepare-download` and
+                    // `/download` are ACCEPTED (see `allowDownloads:` below) — that is a different
+                    // question from whether a browser has anything to talk to. Flip this back to a
+                    // live web-send-session check when the web UI actually exists.
+                    download: false
                 )
                 let runtimeConfiguration = LocalSendRuntimeConfiguration(
                     registerInfo: registerInfo,
@@ -396,6 +432,7 @@ public final class TransferFeatureContainer {
                 logger: logger,
                 settingsPersistence: settingsPersistence,
                 historyPersistence: historyPersistence,
+                favoritesPersistence: favoritesPersistence,
                 loginItemManaging: loginItemManaging,
                 snapshot: snapshot,
                 runtime: runtime,
@@ -416,6 +453,7 @@ public final class TransferFeatureContainer {
                 logger: logger,
                 settingsPersistence: settingsPersistence,
                 historyPersistence: historyPersistence,
+                favoritesPersistence: favoritesPersistence,
                 loginItemManaging: loginItemManaging,
                 snapshot: snapshot,
                 runtime: nil,
@@ -528,6 +566,7 @@ private struct LiveBootstrap: @unchecked Sendable {
     let logger: AppLogger
     let settingsPersistence: SettingsPersistenceAdapter
     let historyPersistence: HistoryPersistenceAdapter
+    let favoritesPersistence: FavoritesPersistenceAdapter
     let loginItemManaging: SMAppServiceLoginItemManager
     let snapshot: TransferSettingsSnapshot
     let runtime: LocalSendRuntimeAdapter?
@@ -557,10 +596,15 @@ actor NoopTransferRuntime: TransferRuntime {
     func refreshDiscovery() async {}
     func discoveredPeers() async -> AsyncStream<[NearbyPeerItem]> { AsyncStream { $0.yield([]) } }
     func inboundRequests() async -> AsyncStream<IncomingTransferRequest> { AsyncStream { _ in } }
+    func inboundRequestWithdrawals() async -> AsyncStream<String> { AsyncStream { _ in } }
     func progressEvents() async -> AsyncStream<TransferProgressEvent> { AsyncStream { _ in } }
     func updateSettings(_ settings: TransferProtocolSettings) async throws {}
     func stage(_ items: [StagedTransferItem]) async {}
-    func sendStagedItems(to peerID: NearbyPeerItem.ID, pin: String?) async throws {}
+    func sendStagedItems(
+        to peerID: NearbyPeerItem.ID,
+        pin: String?,
+        requestPIN: TransferPINProvider?
+    ) async throws {}
     func respondToIncomingRequest(_ response: IncomingTransferDecision) async throws {}
     func cancelActiveTransfer(_ id: ActiveTransferProgress.ID) async throws {}
 }
@@ -577,6 +621,22 @@ private final class NoopSettingsPersistence: TransferSettingsPersisting {
     }
 
     func save(_ snapshot: TransferSettingsSnapshot) {}
+}
+
+final class InMemoryFavoritesPersistence: FavoritesPersisting {
+    private var favorites: [FavoriteDevice]
+
+    init(favorites: [FavoriteDevice] = []) {
+        self.favorites = favorites
+    }
+
+    func load() -> [FavoriteDevice] {
+        favorites
+    }
+
+    func save(_ favorites: [FavoriteDevice]) {
+        self.favorites = favorites
+    }
 }
 
 final class InMemoryHistoryPersistence: HistoryPersisting {

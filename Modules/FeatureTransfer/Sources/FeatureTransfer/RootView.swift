@@ -46,18 +46,33 @@ struct RootView: View {
                         request: request,
                         onDecline: { store.declineIncomingRequest() },
                         onAcceptAll: { store.acceptIncomingRequest() },
-                        onAcceptSelection: { store.acceptIncomingRequest(fileIDs: $0) }
+                        onAcceptSelection: { fileIDs, desiredNames in
+                            store.acceptIncomingRequest(fileIDs: fileIDs, desiredNames: desiredNames)
+                        }
+                    )
+                }
+            case .pinEntry:
+                if let prompt = store.pinPrompt {
+                    SendPINEntrySheet(
+                        prompt: prompt,
+                        onSubmit: { store.submitSendPIN($0) },
+                        onCancel: { store.cancelSendPIN() }
                     )
                 }
             case .progress:
                 if let progress = store.activeTransfer {
-                    TransferProgressSheet(progress: progress) {
-                        if progress.status == .running {
-                            store.cancelActiveTransfer()
-                        } else {
-                            store.dismissProgress()
-                        }
-                    }
+                    TransferProgressSheet(
+                        progress: progress,
+                        onCancel: {
+                            if progress.status == .running {
+                                store.cancelActiveTransfer()
+                            } else {
+                                store.dismissProgress()
+                            }
+                        },
+                        concurrentTransfers: store.inFlightTransfers,
+                        onCancelTransfer: { store.cancelTransfer(id: $0) }
+                    )
                 }
             }
         }
@@ -69,6 +84,17 @@ struct RootView: View {
                 ForEach(Screen.allCases) { screen in
                     SidebarRow(screen: screen, badgeCount: badgeCount(for: screen))
                         .tag(screen)
+                        // A sidebar `List`'s selection highlight follows the SYSTEM control-accent
+                        // colour, not the root view's `.tint(...)`, so an in-app accent choice was
+                        // invisible here. `.listItemTint` is the native hook for exactly this: it
+                        // tints the row's selection accent while AppKit keeps rendering the row —
+                        // hover, vibrancy, and the keyboard-focus ring are all untouched.
+                        //
+                        // Deliberately NOT a custom selection background: drawing our own rounded
+                        // rectangle behind the row is what breaks materials and the focus ring, and
+                        // it overrides a system appearance preference the user may have set on
+                        // purpose.
+                        .listItemTint(store.accentColor.theme.primary)
                 }
             }
         }
@@ -156,6 +182,9 @@ struct RootView: View {
                 if store.incomingRequest != nil {
                     return .incoming
                 }
+                if store.pinPrompt != nil {
+                    return .pinEntry
+                }
                 if store.activeTransfer != nil {
                     return .progress
                 }
@@ -163,12 +192,10 @@ struct RootView: View {
             },
             set: { newValue in
                 guard newValue == nil else { return }
-                if store.incomingRequest != nil {
-                    store.declineIncomingRequest()
-                }
-                if store.activeTransfer != nil {
-                    store.dismissProgress()
-                }
+                // Only the sheet that was actually on screen may be resolved. Testing all three
+                // states independently would let an incoming request's dismissal also cancel a
+                // live outbound PIN prompt and discard the staged batch behind it.
+                store.dismissActiveSheet()
             }
         )
     }
@@ -242,12 +269,15 @@ private struct RefreshToolbarButton: View {
 
 private enum PresentedSheet: Identifiable {
     case incoming
+    case pinEntry
     case progress
 
     var id: String {
         switch self {
         case .incoming:
             return "incoming"
+        case .pinEntry:
+            return "pinEntry"
         case .progress:
             return "progress"
         }

@@ -68,7 +68,7 @@ enum TLSCertificateValidator {
         }
 
         let der = SecCertificateCopyData(certificate) as Data
-        if let expectedFingerprint, Fingerprint.make(from: der) != expectedFingerprint {
+        if let expectedFingerprint, Fingerprint.matches(Fingerprint.make(from: der), expectedFingerprint) == false {
             return false
         }
 

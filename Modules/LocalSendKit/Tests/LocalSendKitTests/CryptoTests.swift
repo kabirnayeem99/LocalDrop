@@ -4,10 +4,17 @@ import Testing
 @testable import LocalSendKit
 
 struct CryptoTests {
-    @Test func fingerprintIsUppercaseSHA256() {
+    @Test func fingerprintIsLowercaseSHA256() {
         let data = Data("hello".utf8)
         let fingerprint = Fingerprint.make(from: data)
-        #expect(fingerprint == SHA256.hash(data: data).map { String(format: "%02X", $0) }.joined())
+        #expect(fingerprint == SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined())
+    }
+
+    @Test func fingerprintMatchingIsCaseInsensitive() {
+        let data = Data("hello".utf8)
+        let fingerprint = Fingerprint.make(from: data)
+        #expect(Fingerprint.matches(fingerprint, fingerprint.uppercased()))
+        #expect(Fingerprint.matches(fingerprint, "deadbeef") == false)
     }
 
     @Test func loadOrCreatePersistsIdentity() throws {

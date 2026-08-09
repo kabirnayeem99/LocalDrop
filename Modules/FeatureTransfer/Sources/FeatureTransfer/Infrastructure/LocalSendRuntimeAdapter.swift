@@ -9,6 +9,17 @@ struct LiveRuntimeComponents {
     let registerInfo: RegisterInfo
 }
 
+/// Fires the best-effort `POST /api/localsend/v2/cancel?sessionId=…` at the peer that is sending
+/// to us, when the LOCAL user cancels an inbound transfer.
+///
+/// A seam rather than a direct `LocalSendClient` call so the "exactly one POST, and only from the
+/// user-initiated entry point" contract is assertable without a live peer on the LAN.
+typealias ReceiveCancelNotifier = @Sendable (
+    _ sessionID: String,
+    _ peer: RemotePeer,
+    _ expectedFingerprint: String
+) async throws -> Void
+
 actor LocalSendRuntimeAdapter: TransferRuntime {
     private var components: LiveRuntimeComponents
     private let makeComponents: @Sendable (TransferProtocolSettings) throws -> LiveRuntimeComponents
@@ -16,28 +27,74 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
     private var stagedItems: [StagedTransferItem] = []
     private var stateObservationTask: Task<Void, Never>?
     private var incomingObservationTask: Task<Void, Never>?
+    private var withdrawalObservationTask: Task<Void, Never>?
     private let peersBroadcaster = StreamBroadcaster<[NearbyPeerItem]>(initialValue: [])
     private let incomingBroadcaster = StreamBroadcaster<IncomingTransferRequest>()
+    private let withdrawalBroadcaster = StreamBroadcaster<String>()
     private let progressBroadcaster = StreamBroadcaster<TransferProgressEvent>()
     private let logger: AppLogger
     private let runtimeInstanceID = UUID().uuidString.lowercased()
     private var restartGeneration = 0
-    private var activeSendSession: ActiveSendSession?
+    /// Outbound send sessions, keyed by their `sessionId`.
+    ///
+    /// Was a single `ActiveSendSession?`, which structurally limited the app to one outbound
+    /// transfer: starting a send to device B silently replaced the bookkeeping for the send still
+    /// running to device A, so A's cancel button and progress rows pointed at the wrong session.
+    /// The session id is unique per target per send, so keying by it isolates them completely —
+    /// tokens, progress and cancellation never cross.
+    private var activeSendSessions: [String: ActiveSendSession] = [:]
+
+    /// Upper bound on files uploading at once WITHIN one send session.
+    ///
+    /// Protocol section 4.2 says the upload route "can be called in parallel", but prescribes no
+    /// number. Kept deliberately modest: the receiver writes to a single session's file pipeline,
+    /// so beyond a small degree of overlap the extra TLS handshakes cost more than they gain, and
+    /// an aggressive pool risks the receiver's `429 Too many requests` path against unknown
+    /// hardware (phones, headless nodes). Concurrency ACROSS target devices is not bounded here —
+    /// that is limited only by how many devices the user sends to.
+    static let maximumConcurrentUploads = 3
     private var lastReceiveStatusKey: String?
     private var emittedReceivedFileKeys: Set<String> = []
     private var emittedReceivedFileKeysSessionID: String?
     private var startupAnnouncementTask: Task<Void, Never>?
     private var progressSequenceNumber: Int64 = 0
+    private let receiveCancelNotifier: ReceiveCancelNotifier
+    /// Receive sessions this app has already cancelled outbound, most recent last. Bounded, because
+    /// its only job is to keep a second press of the cancel button (or a re-entrant call racing the
+    /// state observation) from POSTing `/cancel` twice.
+    private var outboundCanceledReceiveSessionIDs: [String] = []
+
+    /// A dead or unreachable sender must not stall our own teardown, so the notification gets its
+    /// own budget instead of `LocalSendClientTimeoutConfiguration`'s 30s default. Nothing waits on
+    /// the result, so the only cost of it expiring is that the sender falls back to its own timeout
+    /// — exactly the behaviour we had before this notification existed.
+    static let receiveCancelNotificationTimeout: TimeInterval = 4
+
+    /// The real POST. Built per call: a cancel is a single request to a peer we do not otherwise
+    /// hold a client for, and its timeouts differ from every other request we make.
+    static let liveReceiveCancelNotifier: ReceiveCancelNotifier = { sessionID, peer, expectedFingerprint in
+        let client = LocalSendClient(
+            peer: peer,
+            expectedFingerprint: expectedFingerprint,
+            timeoutConfiguration: LocalSendClientTimeoutConfiguration(
+                requestTimeout: LocalSendRuntimeAdapter.receiveCancelNotificationTimeout,
+                resourceTimeout: LocalSendRuntimeAdapter.receiveCancelNotificationTimeout
+            )
+        )
+        try await client.cancel(sessionId: sessionID)
+    }
 
     init(
         components: LiveRuntimeComponents,
         settings: TransferProtocolSettings,
         makeComponents: @escaping @Sendable (TransferProtocolSettings) throws -> LiveRuntimeComponents,
+        receiveCancelNotifier: @escaping ReceiveCancelNotifier = LocalSendRuntimeAdapter.liveReceiveCancelNotifier,
         logger: AppLogger = .disabled()
     ) {
         self.components = components
         self.currentSettings = settings
         self.makeComponents = makeComponents
+        self.receiveCancelNotifier = receiveCancelNotifier
         self.logger = logger
     }
 
@@ -114,10 +171,13 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
         startupAnnouncementTask = nil
         stateObservationTask?.cancel()
         incomingObservationTask?.cancel()
+        withdrawalObservationTask?.cancel()
         logger.emit(level: .debug, event: "app.runtime.stop.requested", scope: "LocalSendRuntimeAdapter", context: runtimeContext(), attributes: [.string("event.action", "stream_teardown")])
         stateObservationTask = nil
         incomingObservationTask = nil
-        activeSendSession = nil
+        withdrawalObservationTask = nil
+        // Every outbound session, not just "the" one — a runtime stop ends them all.
+        activeSendSessions.removeAll()
         await components.node.stop()
         await peersBroadcaster.yield([])
         await progressBroadcaster.clearCurrentValue()
@@ -146,6 +206,10 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
 
     func inboundRequests() async -> AsyncStream<IncomingTransferRequest> {
         await incomingBroadcaster.stream()
+    }
+
+    func inboundRequestWithdrawals() async -> AsyncStream<String> {
+        await withdrawalBroadcaster.stream()
     }
 
     func progressEvents() async -> AsyncStream<TransferProgressEvent> {
@@ -199,8 +263,18 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
         )
     }
 
-    func sendStagedItems(to peerID: NearbyPeerItem.ID, pin: String?) async throws {
-        guard stagedItems.isEmpty == false else {
+    func sendStagedItems(
+        to peerID: NearbyPeerItem.ID,
+        pin: String?,
+        requestPIN: TransferPINProvider?
+    ) async throws {
+        // The batch is captured ONCE, up front, and never re-read from the actor afterwards.
+        // `stagedItems` is shared mutable actor state: a second, overlapping send — or a PIN prompt
+        // dismissal on another one — can empty it across any of the awaits below, which would leave
+        // this send with an empty `acceptedItems`, a zero-byte total, an upload loop that never
+        // runs, and a "completed" log carrying `file_count: 0`.
+        let batch = stagedItems
+        guard batch.isEmpty == false else {
             return
         }
 
@@ -222,7 +296,7 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
             ]
         )
 
-        let files = makeFileMap(from: stagedItems)
+        let files = makeFileMap(from: batch)
         let request = PrepareUploadRequest(info: components.registerInfo, files: files)
         let client = components.node.makeClient(
             host: peer.host,
@@ -238,49 +312,24 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
             attributes: [.int("transfer.file_count", files.count)]
         )
 
-        let prepareResponse: PrepareUploadResponse?
-        do {
-            prepareResponse = try await client.prepareUpload(request, pin: pin)
-        } catch {
-            await emitRawProgressEvent(
-                kind: .transferFailed,
-                transferID: UUID().uuidString,
-                attemptID: UUID().uuidString,
-                direction: .sending,
-                counterpartName: peer.name,
-                counterpartKind: peer.kind,
-                files: stagedItems.enumerated().map { index, item in
-                    TransferProgressRawFile(
-                        fileID: item.id,
-                        displayName: item.name,
-                        fileURL: item.fileURL,
-                        order: index,
-                        attemptIndex: 0,
-                        state: item.id == stagedItems.first?.id ? .failed : .queued,
-                        declaredTotalBytes: item.byteCount,
-                        actualTransferredBytes: 0,
-                        errorSummary: error.localizedDescription
-                    )
-                },
-                totalBytesKnown: stagedItems.compactMap(\.byteCount).reduce(0, +),
-                actualTransferredBytes: 0,
-                cache: false
-            )
-            logger.emit(
-                level: .error,
-                event: "transfer.send.file_upload.failed",
-                scope: "LocalSendRuntimeAdapter",
-                context: context,
-                attributes: [
-                    .string("result", "prepare_upload_failed"),
-                    .string("error.message", error.localizedDescription),
-                    .string("error.type", String(describing: type(of: error)))
-                ]
-            )
-            throw error
+        let phaseOutcome = try await runPrepareUploadPhase(
+            peer: peer,
+            context: context,
+            batch: batch,
+            initialPIN: pin,
+            requestPIN: requestPIN,
+            attempt: { attemptPIN in
+                try await client.prepareUpload(request, pin: attemptPIN)
+            }
+        )
+
+        // The user dismissed the PIN prompt: the send is discarded, staged items already cleared.
+        // No terminal failure is reported because nothing failed.
+        guard case .prepared(let preparedResponse) = phaseOutcome else {
+            return
         }
 
-        guard let prepareResponse else {
+        guard let prepareResponse = preparedResponse else {
             await progressBroadcaster.clearCurrentValue()
             await progressBroadcaster.yield(.reset, cache: false)
             logger.emit(
@@ -293,215 +342,426 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
             return
         }
 
-        activeSendSession = ActiveSendSession(
-            id: prepareResponse.sessionId,
+        let sessionID = prepareResponse.sessionId
+        let acceptedItems = batch
+            .filter { prepareResponse.files[$0.id] != nil }
+            .map { SendBatchItem(item: $0, byteCount: resolvedByteCount(for: $0)) }
+
+        var session = ActiveSendSession(
+            id: sessionID,
             peer: peer,
             client: client,
             traceID: traceID
         )
+        session.acceptedItems = acceptedItems
+        activeSendSessions[sessionID] = session
+
         logger.emit(
             level: .info,
             event: "transfer.send.prepare_upload.succeeded",
             scope: "LocalSendRuntimeAdapter",
-            context: sendContext(sessionID: prepareResponse.sessionId, peer: peer, traceID: traceID),
+            context: sendContext(sessionID: sessionID, peer: peer, traceID: traceID),
             attributes: [.int("transfer.accepted_file_count", prepareResponse.files.count)]
         )
 
-        let acceptedItems = stagedItems
-            .filter { prepareResponse.files[$0.id] != nil }
-            .map { SendBatchItem(item: $0, byteCount: resolvedByteCount(for: $0)) }
-        let totalBatchBytes = acceptedItems.reduce(Int64.zero) { $0 + $1.byteCount }
-        var bytesTransferredBeforeCurrentFile: Int64 = 0
-        activeSendSession?.acceptedItems = acceptedItems
-        activeSendSession?.currentItemIndex = 0
-        activeSendSession?.bytesTransferredBeforeCurrentFile = 0
+        await emitSendProgress(sessionID: sessionID, kind: .transferStarted)
 
-        await emitRawProgressEvent(
-            kind: .transferStarted,
-            transferID: prepareResponse.sessionId,
-            attemptID: prepareResponse.sessionId,
-            direction: .sending,
-            counterpartName: peer.name,
-            counterpartKind: peer.kind,
-            files: Self.makeSendRawFiles(
-                batchItems: acceptedItems,
-                currentItemIndex: nil,
-                currentFileTransferredBytes: 0,
-                currentFileTotalBytes: nil,
-                currentStatus: nil
-            ),
-            totalBytesKnown: totalBatchBytes > 0 ? totalBatchBytes : nil,
-            actualTransferredBytes: 0
-        )
+        // Bounded concurrent uploads. The protocol allows the upload route to be called in
+        // parallel; the pool keeps that from becoming an unbounded fan-out of one connection per
+        // file, which would be worse for both peers than the old sequential loop.
+        //
+        // Failures are COLLECTED, never rethrown out of the group: one bad file must not abandon
+        // the rest of the batch, both because the user's other files should still arrive and
+        // because the receiver now keeps such a session alive in `finishedWithErrors` so those
+        // files can be retried. Throwing here would tear down uploads that were about to succeed.
+        var pending = acceptedItems.makeIterator()
+        var failureCount = 0
 
-        for (index, acceptedItem) in acceptedItems.enumerated() {
-            let item = acceptedItem.item
-            let byteCount = acceptedItem.byteCount
-            let transferredBeforeCurrentFile = bytesTransferredBeforeCurrentFile
-            let currentItemIndex = index + 1
-            guard let token = prepareResponse.files[item.id] else {
-                continue
-            }
-            activeSendSession?.currentItemIndex = currentItemIndex
-            activeSendSession?.bytesTransferredBeforeCurrentFile = transferredBeforeCurrentFile
+        await withTaskGroup(of: SendFileOutcome.self) { group in
+            var inFlight = 0
 
-            await emitRawProgressEvent(
-                kind: .snapshot,
-                transferID: prepareResponse.sessionId,
-                attemptID: prepareResponse.sessionId,
-                direction: .sending,
-                counterpartName: peer.name,
-                counterpartKind: peer.kind,
-                files: Self.makeSendRawFiles(
-                    batchItems: acceptedItems,
-                    currentItemIndex: currentItemIndex,
-                    currentFileTransferredBytes: 0,
-                    currentFileTotalBytes: byteCount,
-                    currentStatus: .transferring
-                ),
-                totalBytesKnown: totalBatchBytes > 0 ? totalBatchBytes : nil,
-                actualTransferredBytes: bytesTransferredBeforeCurrentFile
-            )
-
-            logger.emit(
-                level: .info,
-                event: "transfer.send.file_upload.started",
-                scope: "LocalSendRuntimeAdapter",
-                context: sendContext(sessionID: prepareResponse.sessionId, peer: peer, traceID: traceID),
-                attributes: [
-                    .string("transfer.file_id", item.id),
-                    .string("transfer.file_name", item.name),
-                    .int64("transfer.byte_count", byteCount)
-                ]
-            )
-            do {
-                try await client.upload(
-                    fileAt: item.fileURL,
-                    byteCount: byteCount,
-                    sessionId: prepareResponse.sessionId,
-                    fileId: item.id,
-                    token: token,
-                    progress: { [weak self] progress in
-                        Task {
-                            await self?.emitRawProgressEvent(
-                                kind: .snapshot,
-                                transferID: prepareResponse.sessionId,
-                                attemptID: prepareResponse.sessionId,
-                                direction: .sending,
-                                counterpartName: peer.name,
-                                counterpartKind: peer.kind,
-                                files: Self.makeSendRawFiles(
-                                    batchItems: acceptedItems,
-                                    currentItemIndex: currentItemIndex,
-                                    currentFileTransferredBytes: progress.bytesTransferred,
-                                    currentFileTotalBytes: progress.totalBytes,
-                                    currentStatus: .transferring
-                                ),
-                                totalBytesKnown: totalBatchBytes > 0 ? totalBatchBytes : nil,
-                                actualTransferredBytes: min(totalBatchBytes, transferredBeforeCurrentFile + progress.bytesTransferred)
-                            )
-                        }
+            func addNext() -> Bool {
+                while let batchItem = pending.next() {
+                    guard let token = prepareResponse.files[batchItem.item.id] else {
+                        continue
                     }
-                )
-            } catch {
-                await emitRawProgressEvent(
-                    kind: .transferFailed,
-                    transferID: prepareResponse.sessionId,
-                    attemptID: prepareResponse.sessionId,
-                    direction: .sending,
-                    counterpartName: peer.name,
-                    counterpartKind: peer.kind,
-                    files: Self.makeSendRawFiles(
-                        batchItems: acceptedItems,
-                        currentItemIndex: currentItemIndex,
-                        currentFileTransferredBytes: 0,
-                        currentFileTotalBytes: byteCount,
-                        currentStatus: .failed,
-                        errorSummary: error.localizedDescription
-                    ),
-                    totalBytesKnown: totalBatchBytes > 0 ? totalBatchBytes : nil,
-                    actualTransferredBytes: bytesTransferredBeforeCurrentFile,
-                    cache: false
-                )
-                activeSendSession = nil
-                logger.emit(
-                    level: .error,
-                    event: "transfer.send.file_upload.failed",
-                    scope: "LocalSendRuntimeAdapter",
-                    context: sendContext(sessionID: prepareResponse.sessionId, peer: peer, traceID: traceID),
-                    attributes: [
-                        .string("transfer.file_id", item.id),
-                        .string("transfer.file_name", item.name),
-                        .int64("transfer.byte_count", byteCount),
-                        .string("error.message", error.localizedDescription),
-                        .string("error.type", String(describing: type(of: error)))
-                    ]
-                )
-                throw error
+                    group.addTask { [weak self] in
+                        guard let self else {
+                            return SendFileOutcome(fileID: batchItem.item.id, errorSummary: "cancelled")
+                        }
+                        return await self.uploadOneFile(
+                            batchItem: batchItem,
+                            token: token,
+                            sessionID: sessionID,
+                            client: client,
+                            peer: peer,
+                            traceID: traceID
+                        )
+                    }
+                    return true
+                }
+                return false
             }
-            logger.emit(
-                level: .info,
-                event: "transfer.send.file_upload.completed",
-                scope: "LocalSendRuntimeAdapter",
-                context: sendContext(sessionID: prepareResponse.sessionId, peer: peer, traceID: traceID),
-                attributes: [
-                    .string("transfer.file_id", item.id),
-                    .string("transfer.file_name", item.name),
-                    .int64("transfer.byte_count", byteCount)
-                ]
-            )
 
-            bytesTransferredBeforeCurrentFile += byteCount
-            activeSendSession?.bytesTransferredBeforeCurrentFile = bytesTransferredBeforeCurrentFile
-            if index + 1 == acceptedItems.count {
-                await emitRawProgressEvent(
-                    kind: .transferCompleted,
-                    transferID: prepareResponse.sessionId,
-                    attemptID: prepareResponse.sessionId,
-                    direction: .sending,
-                    counterpartName: peer.name,
-                    counterpartKind: peer.kind,
-                    files: Self.makeSendRawFiles(
-                        batchItems: acceptedItems,
-                        currentItemIndex: currentItemIndex,
-                        currentFileTransferredBytes: byteCount,
-                        currentFileTotalBytes: byteCount,
-                        currentStatus: .completed
-                    ),
-                    totalBytesKnown: totalBatchBytes > 0 ? totalBatchBytes : nil,
-                    actualTransferredBytes: bytesTransferredBeforeCurrentFile,
-                    cache: false
-                )
-            } else {
-                await emitRawProgressEvent(
-                    kind: .snapshot,
-                    transferID: prepareResponse.sessionId,
-                    attemptID: prepareResponse.sessionId,
-                    direction: .sending,
-                    counterpartName: peer.name,
-                    counterpartKind: peer.kind,
-                    files: Self.makeSendRawFiles(
-                        batchItems: acceptedItems,
-                        currentItemIndex: currentItemIndex,
-                        currentFileTransferredBytes: byteCount,
-                        currentFileTotalBytes: byteCount,
-                        currentStatus: .completed
-                    ),
-                    totalBytesKnown: totalBatchBytes > 0 ? totalBatchBytes : nil,
-                    actualTransferredBytes: bytesTransferredBeforeCurrentFile
-                )
+            while inFlight < Self.maximumConcurrentUploads, addNext() {
+                inFlight += 1
+            }
+
+            while let outcome = await group.next() {
+                inFlight -= 1
+                if outcome.errorSummary != nil {
+                    failureCount += 1
+                }
+                // One completion frees exactly one slot, so the pool width is held at the bound
+                // rather than refilling to it in bursts.
+                if addNext() {
+                    inFlight += 1
+                }
             }
         }
 
-        stagedItems.removeAll()
-        activeSendSession = nil
+        // The session may have been cancelled (or the runtime restarted) while uploads were in
+        // flight, in which case its terminal event was already emitted and its entry removed.
+        guard activeSendSessions[sessionID] != nil else {
+            removeStagedItems(in: batch)
+            return
+        }
+
+        await emitSendProgress(
+            sessionID: sessionID,
+            kind: failureCount > 0 ? .transferFailed : .transferCompleted,
+            cache: false
+        )
+        logger.emit(
+            level: failureCount > 0 ? .error : .info,
+            event: failureCount > 0 ? "transfer.send.completed_with_errors" : "transfer.send.completed",
+            scope: "LocalSendRuntimeAdapter",
+            context: sendContext(sessionID: sessionID, peer: peer, traceID: traceID),
+            attributes: [
+                .int("transfer.file_count", acceptedItems.count),
+                .int("transfer.failed_file_count", failureCount)
+            ]
+        )
+        activeSendSessions[sessionID] = nil
+
+        // Scoped to this send's own batch so a concurrent send's staged items survive.
+        removeStagedItems(in: batch)
+    }
+
+    /// Uploads exactly one file of a batch and folds its progress into the session.
+    ///
+    /// Returns rather than throws: the caller runs these in a group and a throw would cancel the
+    /// sibling uploads that are mid-flight.
+    private func uploadOneFile(
+        batchItem: SendBatchItem,
+        token: String,
+        sessionID: String,
+        client: LocalSendClient,
+        peer: NearbyPeerItem,
+        traceID: String
+    ) async -> SendFileOutcome {
+        let item = batchItem.item
+        let byteCount = batchItem.byteCount
+
+        markFileState(sessionID: sessionID, fileID: item.id, status: .transferring, transferredBytes: 0)
+        await emitSendProgress(sessionID: sessionID, kind: .snapshot)
+
         logger.emit(
             level: .info,
-            event: "transfer.send.completed",
+            event: "transfer.send.file_upload.started",
             scope: "LocalSendRuntimeAdapter",
-            context: sendContext(sessionID: prepareResponse.sessionId, peer: peer, traceID: traceID),
-            attributes: [.int("transfer.file_count", acceptedItems.count)]
+            context: sendContext(sessionID: sessionID, peer: peer, traceID: traceID),
+            attributes: [
+                .string("transfer.file_id", item.id),
+                .string("transfer.file_name", item.name),
+                .int64("transfer.byte_count", byteCount)
+            ]
         )
+
+        // ONE consumer task per file, instead of a `Task { }` per `didSendBodyData` callback.
+        //
+        // URLSession fires that callback for every buffer it writes, so the old shape created an
+        // unbounded, unordered swarm of tasks whose only job was a single actor hop. Here the
+        // callback is a synchronous `yield` and a single long-lived task drains it.
+        //
+        // `.bufferingNewest(1)` is what makes this correct as well as cheap: if the consumer falls
+        // behind, the intermediate byte counts are dropped and it observes only the most recent
+        // one. For a monotonically increasing progress counter that is exactly right — the stale
+        // samples carry no information the newest one lacks. `recordUploadProgress` additionally
+        // ignores any sample that would move the count backwards.
+        let (progressStream, progressContinuation) = AsyncStream<Int64>.makeStream(
+            bufferingPolicy: .bufferingNewest(1)
+        )
+        let progressConsumer = Task { [weak self] in
+            for await transferredBytes in progressStream {
+                guard let self else { return }
+                await self.recordUploadProgress(
+                    sessionID: sessionID,
+                    fileID: item.id,
+                    transferredBytes: transferredBytes
+                )
+            }
+        }
+        // Ends the consumer on every exit path, including the throw below. Without this the task
+        // would outlive the upload and leak for the lifetime of the process.
+        defer {
+            progressContinuation.finish()
+        }
+        _ = progressConsumer
+
+        do {
+            try await client.upload(
+                fileAt: item.fileURL,
+                byteCount: byteCount,
+                sessionId: sessionID,
+                fileId: item.id,
+                token: token,
+                progress: { progress in
+                    progressContinuation.yield(progress.bytesTransferred)
+                }
+            )
+        } catch {
+            let summary = SensitiveTextRedaction.redactedDescription(of: error)
+            markFileState(sessionID: sessionID, fileID: item.id, status: .failed, transferredBytes: 0, errorSummary: summary)
+            await emitSendProgress(sessionID: sessionID, kind: .snapshot, cache: false)
+            logger.emit(
+                level: .error,
+                event: "transfer.send.file_upload.failed",
+                scope: "LocalSendRuntimeAdapter",
+                context: sendContext(sessionID: sessionID, peer: peer, traceID: traceID),
+                attributes: [
+                    .string("transfer.file_id", item.id),
+                    .string("transfer.file_name", item.name),
+                    .int64("transfer.byte_count", byteCount),
+                    .string("error.message", summary),
+                    .string("error.type", String(describing: type(of: error)))
+                ]
+            )
+            return SendFileOutcome(fileID: item.id, errorSummary: summary)
+        }
+
+        markFileState(sessionID: sessionID, fileID: item.id, status: .completed, transferredBytes: byteCount)
+        await emitSendProgress(sessionID: sessionID, kind: .snapshot)
+        logger.emit(
+            level: .info,
+            event: "transfer.send.file_upload.completed",
+            scope: "LocalSendRuntimeAdapter",
+            context: sendContext(sessionID: sessionID, peer: peer, traceID: traceID),
+            attributes: [
+                .string("transfer.file_id", item.id),
+                .string("transfer.file_name", item.name),
+                .int64("transfer.byte_count", byteCount)
+            ]
+        )
+        return SendFileOutcome(fileID: item.id, errorSummary: nil)
+    }
+
+    private func markFileState(
+        sessionID: String,
+        fileID: String,
+        status: TransferFileProgress.Status,
+        transferredBytes: Int64,
+        errorSummary: String? = nil
+    ) {
+        guard var session = activeSendSessions[sessionID] else {
+            return
+        }
+        session.statusByFileID[fileID] = status
+        session.transferredBytesByFileID[fileID] = transferredBytes
+        if let errorSummary {
+            session.errorByFileID[fileID] = errorSummary
+        }
+        activeSendSessions[sessionID] = session
+    }
+
+    /// Folds a URLSession byte callback into the session total.
+    ///
+    /// `max` rather than assignment: `didSendBodyData` callbacks for one task are ordered, but the
+    /// hop through this actor is not, so a stale smaller value must never walk the count backwards
+    /// and make the progress bar jump about.
+    private func recordUploadProgress(sessionID: String, fileID: String, transferredBytes: Int64) async {
+        guard var session = activeSendSessions[sessionID],
+              session.statusByFileID[fileID] == .transferring else {
+            return
+        }
+        let previous = session.transferredBytesByFileID[fileID] ?? 0
+        guard transferredBytes > previous else {
+            return
+        }
+        session.transferredBytesByFileID[fileID] = transferredBytes
+        activeSendSessions[sessionID] = session
+        await emitSendProgress(sessionID: sessionID, kind: .snapshot)
+    }
+
+    /// Emits the current state of one send session. Every send-side progress event goes through
+    /// here so the file rows and the batch totals are always derived from the same snapshot.
+    private func emitSendProgress(
+        sessionID: String,
+        kind: TransferProgressRawEvent.Kind,
+        cache: Bool = true
+    ) async {
+        guard let session = activeSendSessions[sessionID] else {
+            return
+        }
+        let totalBatchBytes = session.totalBatchBytes
+        await emitRawProgressEvent(
+            kind: kind,
+            transferID: session.id,
+            attemptID: session.id,
+            direction: .sending,
+            counterpartName: session.peer.name,
+            counterpartKind: session.peer.kind,
+            files: Self.makeSendRawFiles(session: session),
+            totalBytesKnown: totalBatchBytes > 0 ? totalBatchBytes : nil,
+            actualTransferredBytes: session.transferredBytes,
+            cache: cache
+        )
+    }
+
+    /// Outcome of the `/prepare-upload` phase, which now spans more than one request.
+    enum PrepareUploadPhaseOutcome {
+        /// The recipient answered; `nil` is the 204 "no file transfer needed" success.
+        case prepared(PrepareUploadResponse?)
+        /// The user dismissed the PIN prompt. Not a failure — the send is simply discarded.
+        case canceledByPINPrompt
+    }
+
+    /// Runs `/prepare-upload`, re-issuing it with a user-supplied PIN for as long as the recipient
+    /// answers 401 and the user keeps submitting one.
+    ///
+    /// Three properties are load-bearing:
+    ///
+    /// 1. A 401 emits **no** progress event. It is a prompt, not a terminal state — and because
+    ///    `TransferProgressReducer` keys transfer continuity on the transfer ID, a terminal event
+    ///    here (which carries a freshly minted random ID) would strand a "failed" card that the
+    ///    eventual real transfer could never reconcile with.
+    /// 2. The loop lives inside one `sendStagedItems` invocation, so the batch is one logical
+    ///    transfer and the staged items are never re-staged.
+    /// 3. Every retry is a deliberate user submission. Nothing here retries on its own: the
+    ///    receiver locks out after three wrong non-empty PINs (`PinAttemptTracker`), and a 429
+    ///    (`.tooManyRequests`) leaves via the terminal path below without re-prompting.
+    ///
+    /// `internal` rather than `private` so the retry semantics are exercisable without a live peer.
+    ///
+    /// `batch` is the caller's own captured batch. It defaults to the currently staged items so the
+    /// phase stays callable on its own, but `sendStagedItems` always passes its local copy: both the
+    /// cancel-path teardown and the failure event must describe *this* send, not whatever another
+    /// concurrent send happens to have staged by the time an await resumes.
+    func runPrepareUploadPhase(
+        peer: NearbyPeerItem,
+        context: AppLogContext,
+        batch: [StagedTransferItem]? = nil,
+        initialPIN: String?,
+        requestPIN: TransferPINProvider?,
+        attempt: @Sendable (String?) async throws -> PrepareUploadResponse?
+    ) async throws -> PrepareUploadPhaseOutcome {
+        let scopedBatch = batch ?? stagedItems
+        var currentPIN = initialPIN
+        // Mirrors the reference implementation's `pinFirstAttempt`.
+        var isFirstPINAttempt = true
+
+        while true {
+            do {
+                return .prepared(try await attempt(currentPIN))
+            } catch {
+                // 403 / 409 / 429 and every transport error take the terminal path unchanged, and
+                // so does a 401 when no prompt is wired up (preserving the pre-existing behaviour).
+                guard (error as? LocalSendClientError) == .pinRequired, let requestPIN else {
+                    await emitPrepareUploadFailure(error, peer: peer, context: context, batch: scopedBatch)
+                    throw error
+                }
+
+                logger.emit(
+                    level: .notice,
+                    event: "transfer.send.prepare_upload.pin_required",
+                    scope: "LocalSendRuntimeAdapter",
+                    context: context,
+                    attributes: [.bool("transfer.pin_first_attempt", isFirstPINAttempt)]
+                )
+
+                let promptContext = TransferPINPromptContext(
+                    peerID: peer.id,
+                    peerName: peer.name,
+                    isFirstAttempt: isFirstPINAttempt
+                )
+                guard let submittedPIN = await requestPIN(promptContext) else {
+                    // The staged items were held for the duration of the prompt; dismissing it
+                    // discards this send — and only this send's items, so an overlapping send's
+                    // batch is not collaterally emptied.
+                    removeStagedItems(in: scopedBatch)
+                    await progressBroadcaster.clearCurrentValue()
+                    await progressBroadcaster.yield(.reset, cache: false)
+                    logger.emit(
+                        level: .notice,
+                        event: "transfer.send.prepare_upload.pin_prompt_canceled",
+                        scope: "LocalSendRuntimeAdapter",
+                        context: context
+                    )
+                    return .canceledByPINPrompt
+                }
+
+                isFirstPINAttempt = false
+                currentPIN = submittedPIN
+            }
+        }
+    }
+
+    /// Terminal `/prepare-upload` outcome: one progress event carrying the mapped status, plus the
+    /// log line. The message is PIN-redacted because a transport error can wrap the request URL.
+    private func emitPrepareUploadFailure(
+        _ error: any Error,
+        peer: NearbyPeerItem,
+        context: AppLogContext,
+        batch: [StagedTransferItem]
+    ) async {
+        await emitRawProgressEvent(
+            kind: Self.progressKind(forPrepareUploadError: error),
+            transferID: UUID().uuidString,
+            attemptID: UUID().uuidString,
+            direction: .sending,
+            counterpartName: peer.name,
+            counterpartKind: peer.kind,
+            files: batch.enumerated().map { index, item in
+                TransferProgressRawFile(
+                    fileID: item.id,
+                    displayName: item.name,
+                    fileURL: item.fileURL,
+                    order: index,
+                    attemptIndex: 0,
+                    state: item.id == batch.first?.id ? .failed : .queued,
+                    declaredTotalBytes: item.byteCount,
+                    actualTransferredBytes: 0,
+                    errorSummary: Self.failureSummary(forPrepareUploadError: error)
+                )
+            },
+            totalBytesKnown: batch.compactMap(\.byteCount).reduce(0, +),
+            actualTransferredBytes: 0,
+            cache: false
+        )
+        logger.emit(
+            level: .error,
+            event: "transfer.send.file_upload.failed",
+            scope: "LocalSendRuntimeAdapter",
+            context: context,
+            attributes: [
+                .string("result", "prepare_upload_failed"),
+                .string("error.message", SensitiveTextRedaction.redactedDescription(of: error)),
+                .string("error.type", String(describing: type(of: error)))
+            ]
+        )
+    }
+
+    /// MainActor-free read of the held staged batch, for tests that pin the "a throw must not
+    /// discard the staged items" invariant the PIN retry depends on.
+    func stagedItemsSnapshot() -> [StagedTransferItem] {
+        stagedItems
+    }
+
+    /// Drops exactly the items of one send's batch, leaving anything another concurrent send has
+    /// staged in place. A blanket `stagedItems.removeAll()` here would empty the other send's batch.
+    private func removeStagedItems(in batch: [StagedTransferItem]) {
+        let batchIDs = Set(batch.map(\.id))
+        stagedItems.removeAll { batchIDs.contains($0.id) }
     }
 
     func respondToIncomingRequest(_ response: IncomingTransferDecision) async throws {
@@ -517,48 +777,151 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
             try await components.node.respondToIncomingTransfer(requestID: requestID, decision: .reject)
         case .acceptAll(let requestID):
             try await components.node.respondToIncomingTransfer(requestID: requestID, decision: .acceptAll)
-        case .acceptSubset(let requestID, let fileIDs):
-            try await components.node.respondToIncomingTransfer(requestID: requestID, decision: .acceptOnly(fileIDs))
+        case .acceptSubset(let requestID, let fileIDs, let desiredNames):
+            try await components.node.respondToIncomingTransfer(
+                requestID: requestID,
+                decision: .acceptOnly(fileIDs, desiredNames: desiredNames)
+            )
         case .noTransferNeeded(let requestID):
             try await components.node.respondToIncomingTransfer(requestID: requestID, decision: .noTransferNeeded)
         }
     }
 
     func cancelActiveTransfer(_ id: ActiveTransferProgress.ID) async throws {
-        if let activeSendSession, activeSendSession.id == id {
-            let session = activeSendSession
-            try await activeSendSession.client.cancel(sessionId: activeSendSession.id)
-            self.activeSendSession = nil
-            await emitRawProgressEvent(
-                kind: .transferCanceled,
-                transferID: session.id,
-                attemptID: session.id,
-                direction: .sending,
-                counterpartName: session.peer.name,
-                counterpartKind: session.peer.kind,
-                files: Self.makeSendRawFiles(
-                    batchItems: session.acceptedItems,
-                    currentItemIndex: session.currentItemIndex > 0 ? session.currentItemIndex : nil,
-                    currentFileTransferredBytes: 0,
-                    currentFileTotalBytes: session.currentItemIndex > 0 ? session.acceptedItems[session.currentItemIndex - 1].byteCount : nil,
-                    currentStatus: .canceled
-                ),
-                totalBytesKnown: session.acceptedItems.reduce(0) { $0 + $1.byteCount },
-                actualTransferredBytes: session.bytesTransferredBeforeCurrentFile,
-                cache: false
-            )
+        // Keyed lookup, so cancelling the send to device A cannot touch a concurrent send to
+        // device B: only the matching session's `/cancel` is posted and only its entry is removed.
+        if var session = activeSendSessions[id] {
+            try await session.client.cancel(sessionId: session.id)
+
+            // Files still in flight become `.canceled` rather than staying `.transferring`, so the
+            // terminal event describes the batch honestly. Completed files keep their status.
+            for batchItem in session.acceptedItems {
+                let fileID = batchItem.item.id
+                let status = session.statusByFileID[fileID] ?? .queued
+                if status != .completed && status != .failed {
+                    session.statusByFileID[fileID] = .canceled
+                }
+            }
+            activeSendSessions[id] = session
+
+            await emitSendProgress(sessionID: id, kind: .transferCanceled, cache: false)
+            // Removed only AFTER the event is emitted — `emitSendProgress` reads the session.
+            activeSendSessions[id] = nil
+
             logger.emit(
                 level: .notice,
                 event: "transfer.send.canceled",
                 scope: "LocalSendRuntimeAdapter",
                 context: sendContext(sessionID: session.id, peer: session.peer, traceID: session.traceID)
             )
+            return
+        }
+
+        await cancelActiveReceiveTransfer(id)
+    }
+
+    /// User-initiated cancel of an INBOUND transfer (backlog #23).
+    ///
+    /// Three things have to happen, and none of them may depend on another succeeding:
+    ///
+    ///  1. the local `ReceiveSession` is torn down — without this the cancel button did literally
+    ///     nothing, and the session went on blocking every later transfer with a 409;
+    ///  2. the UI is told, via the `.transferCanceled` that `handleReceiveSessionUpdate` emits when
+    ///     the server's state notification lands (so the receive card reaches its terminal state
+    ///     through exactly one code path, whoever initiated the cancel);
+    ///  3. the SENDER is told, so it stops uploading now instead of waiting out its own timeout.
+    ///
+    /// (3) is detached and best-effort: an unreachable sender must not stall (1), and its failure
+    /// is logged, never surfaced.
+    ///
+    /// **The outbound POST is fired ONLY from here.** It must never be driven off the observed
+    /// `.canceled` transition: a peer-initiated `/cancel` reaches us through that very observation,
+    /// so doing so would bounce a `/cancel` straight back at the peer that just cancelled us.
+    private func cancelActiveReceiveTransfer(_ id: ActiveTransferProgress.ID) async {
+        guard let session = await components.node.runtimeSnapshot().receiveSession,
+              session.sessionId == id,
+              session.status == .waiting || session.status == .transferring else {
+            return
+        }
+        guard outboundCanceledReceiveSessionIDs.contains(id) == false else {
+            return
+        }
+        rememberOutboundCanceledReceiveSession(id)
+
+        let context = receiveContext(sessionID: id, senderAlias: session.senderInfo.alias)
+        // Local teardown first, and unconditionally: it is the only part the user can see fail.
+        let canceled = await components.node.cancelReceiveSession(sessionId: id)
+        logger.emit(
+            level: .notice,
+            event: "transfer.receive.canceled",
+            scope: "LocalSendRuntimeAdapter",
+            context: context,
+            attributes: [
+                .string("event.action", "user_canceled"),
+                .bool("transfer.session_canceled", canceled)
+            ]
+        )
+
+        guard let port = session.senderInfo.port else {
+            // No port means no way to reach the sender — the local cancel above still stands.
+            logger.emit(
+                level: .warning,
+                event: "transfer.receive.cancel_notification_skipped",
+                scope: "LocalSendRuntimeAdapter",
+                context: context,
+                attributes: [.string("result", "sender_port_unknown")]
+            )
+            return
+        }
+
+        let peer = RemotePeer(
+            host: session.senderIP,
+            port: port,
+            protocolType: session.senderInfo.protocolType ?? currentSettings.protocolType
+        )
+        let fingerprint = session.senderInfo.fingerprint
+        let notifier = receiveCancelNotifier
+        let notificationLogger = logger
+        Task.detached(priority: .utility) {
+            do {
+                try await notifier(id, peer, fingerprint)
+                notificationLogger.emit(
+                    level: .info,
+                    event: "transfer.receive.cancel_notification_succeeded",
+                    scope: "LocalSendRuntimeAdapter",
+                    context: context
+                )
+            } catch {
+                // Swallowed on purpose. The sender being unreachable changes nothing about the
+                // local cancel, and there is no user-actionable recovery to offer.
+                notificationLogger.emit(
+                    level: .warning,
+                    event: "transfer.receive.cancel_notification_failed",
+                    scope: "LocalSendRuntimeAdapter",
+                    context: context,
+                    attributes: [
+                        .string("error.message", SensitiveTextRedaction.redactedDescription(of: error)),
+                        .string("error.type", String(describing: type(of: error)))
+                    ]
+                )
+            }
         }
     }
+
+    private func rememberOutboundCanceledReceiveSession(_ id: String) {
+        outboundCanceledReceiveSessionIDs.append(id)
+        let overflow = outboundCanceledReceiveSessionIDs.count - Self.outboundCanceledReceiveSessionMemory
+        if overflow > 0 {
+            outboundCanceledReceiveSessionIDs.removeFirst(overflow)
+        }
+    }
+
+    private static let outboundCanceledReceiveSessionMemory = 64
 
     private func bindNodeObservers() {
         stateObservationTask?.cancel()
         incomingObservationTask?.cancel()
+        withdrawalObservationTask?.cancel()
 
         stateObservationTask = Task {
             logger.emit(level: .debug, event: "discovery.peer.snapshot", scope: "LocalSendRuntimeAdapter", context: runtimeContext(), attributes: [.string("event.action", "stream_started")])
@@ -588,25 +951,25 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
             let requestStream = await components.node.incomingTransferRequests()
             for await request in requestStream {
                 let mappedFiles = request.files.values.sorted { $0.fileName < $1.fileName }.map { file in
-                    IncomingTransferFile(
-                        id: file.id,
-                        name: file.fileName,
-                        size: ByteCountFormatter.string(fromByteCount: file.size, countStyle: .file),
-                        symbol: Self.symbol(for: file)
-                    )
+                    IncomingTransferFile(file: file, symbol: Self.symbol(for: file))
                 }
                 let totalBytes = request.files.values.reduce(Int64.zero) { $0 + $1.size }
                 let fileCountLabel = FeatureTransferLocalization.format("incomingRequest.itemCount", mappedFiles.count)
                 let totalSizeLabel = ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file)
                 let subtitle = FeatureTransferLocalization.format("incomingRequest.subtitleFormat", request.info.alias, fileCountLabel, totalSizeLabel)
+                // `cache: false` (as with withdrawals below): a cached request would be replayed to any
+                // later subscriber, which now means silently re-accepting and re-downloading a request
+                // that has already been resolved.
                 await incomingBroadcaster.yield(
                     IncomingTransferRequest(
                         id: request.id,
                         deviceName: request.info.alias,
                         subtitle: subtitle,
                         sourceKind: DeviceKind(deviceType: request.info.deviceType),
-                        files: mappedFiles
-                    )
+                        files: mappedFiles,
+                        senderFingerprint: request.info.fingerprint
+                    ),
+                    cache: false
                 )
                 logger.emit(
                     level: .info,
@@ -623,6 +986,25 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
                 )
             }
             logger.emit(level: .debug, event: "transfer.incoming.request_bridge_finished", scope: "LocalSendRuntimeAdapter", context: runtimeContext(), attributes: [.string("event.action", "stream_finished")])
+        }
+
+        // Third, additive observation: prompts withdrawn by the network side. Nothing else clears
+        // `TransferFeatureStore.incomingRequest` without a user action, which is why the sheet used
+        // to stick after a sender-initiated cancel.
+        withdrawalObservationTask = Task {
+            let withdrawalStream = await components.node.incomingTransferRequestWithdrawals()
+            for await requestID in withdrawalStream {
+                await withdrawalBroadcaster.yield(requestID, cache: false)
+                logger.emit(
+                    level: .notice,
+                    event: "transfer.incoming.request_withdrawn",
+                    scope: "LocalSendRuntimeAdapter",
+                    context: AppLogContext(
+                        attributes: runtimeContext().attributes + [.string("transfer.request_id", requestID)]
+                    ),
+                    attributes: [.string("event.action", "sender_canceled")]
+                )
+            }
         }
     }
 
@@ -684,6 +1066,18 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
         )
     }
 
+    private func receiveContext(sessionID: String, senderAlias: String) -> AppLogContext {
+        AppLogContext(
+            attributes: runtimeContext().attributes + [
+                .string("transfer.direction", "receiving"),
+                .string("transfer.session_id", sessionID),
+                .string("peer.alias", senderAlias),
+                .string("network.protocol.name", "localsend"),
+                .string("network.transport", "tcp")
+            ]
+        )
+    }
+
     private func incomingDecisionEvent(_ response: IncomingTransferDecision) -> String {
         switch response {
         case .reject:
@@ -701,8 +1095,13 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
         switch response {
         case .reject(let requestID), .acceptAll(let requestID), .noTransferNeeded(let requestID):
             [.string("transfer.request_id", requestID)]
-        case .acceptSubset(let requestID, let fileIDs):
-            [.string("transfer.request_id", requestID), .int("transfer.accepted_file_count", fileIDs.count)]
+        case .acceptSubset(let requestID, let fileIDs, let desiredNames):
+            // The renamed COUNT, never the names themselves — a filename is user content.
+            [
+                .string("transfer.request_id", requestID),
+                .int("transfer.accepted_file_count", fileIDs.count),
+                .int("transfer.renamed_file_count", desiredNames.keys.filter(fileIDs.contains).count)
+            ]
         }
     }
 
@@ -718,6 +1117,8 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
             "transfer.receive.session_canceled"
         case .failed:
             "transfer.receive.session_failed"
+        case .finishedWithErrors:
+            "transfer.receive.session_finished_with_errors"
         }
     }
 
@@ -749,7 +1150,9 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
                 let fileState: TransferFileProgress.Status
                 switch receiveSession.status {
                 case .waiting:
-                    fileState = isCurrent ? .queued : .queued
+                    // Nothing has begun while the session waits, so `isCurrent` draws no
+                    // distinction here: every file is queued.
+                    fileState = .queued
                 case .transferring:
                     if FileManager.default.fileExists(atPath: record.destinationURL.path) {
                         fileState = .completed
@@ -764,6 +1167,11 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
                     fileState = isCurrent ? .canceled : (FileManager.default.fileExists(atPath: record.destinationURL.path) ? .completed : .queued)
                 case .failed:
                     fileState = isCurrent ? .failed : (FileManager.default.fileExists(atPath: record.destinationURL.path) ? .completed : .queued)
+                case .finishedWithErrors:
+                    // Every file is terminal, so per-file state comes from the session's explicit
+                    // failure set rather than from `isCurrent` — under a partial failure there is
+                    // no single "current" file, and the ones that succeeded are genuinely on disk.
+                    fileState = receiveSession.failedFileIDs.contains(record.file.id) ? .failed : .completed
                 }
 
                 let transferredBytes: Int64
@@ -800,6 +1208,10 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
             kind = .transferCanceled
         case .failed:
             kind = .transferFailed
+        case .finishedWithErrors:
+            // Terminal, and partially unsuccessful: surfaced as a failure so the user is told some
+            // files did not arrive, rather than as a clean completion.
+            kind = .transferFailed
         }
 
         await emitRawProgressEvent(
@@ -829,40 +1241,74 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
             .first { FileManager.default.fileExists(atPath: $0.destinationURL.path) == false }
     }
 
-    private static func makeSendRawFiles(
-        batchItems: [SendBatchItem],
-        currentItemIndex: Int?,
-        currentFileTransferredBytes: Int64,
-        currentFileTotalBytes: Int64?,
-        currentStatus: TransferFileProgress.Status?,
-        errorSummary: String? = nil
-    ) -> [TransferProgressRawFile] {
-        batchItems.enumerated().map { index, batchItem in
-            let itemIndex = index + 1
-            let status: TransferFileProgress.Status
-            let transferredBytes: Int64
+    /// Maps the `/prepare-upload` error taxonomy (protocol section 4.1) onto the progress event
+    /// kinds so each outcome reaches the user with its own copy instead of a generic failure.
+    /// Note this is only correct for `/prepare-upload`; upload- and cancel-time failures keep
+    /// `.transferFailed` because the same status codes mean different things there.
+    private static func progressKind(forPrepareUploadError error: Error) -> TransferProgressRawEvent.Kind {
+        switch error as? LocalSendClientError {
+        case .pinRequired:
+            return .transferPINRequired
+        case .rejected:
+            return .transferRejected
+        case .blockedByAnotherSession:
+            return .transferBlocked
+        case .tooManyRequests:
+            return .transferRateLimited
+        default:
+            return .transferFailed
+        }
+    }
 
-            if let currentItemIndex, itemIndex < currentItemIndex {
-                status = .completed
+    /// Per-file summary shown next to the failed row. `LocalSendClientError` has no
+    /// `LocalizedError` conformance (LocalSendKit is deliberately free of user-facing copy), so
+    /// its `localizedDescription` would read "operation couldn't be completed … error 3".
+    private static func failureSummary(forPrepareUploadError error: Error) -> String {
+        switch error as? LocalSendClientError {
+        case .pinRequired:
+            return FeatureTransferLocalization.string(forKey: "feedback.transferPINRequired")
+        case .rejected:
+            return FeatureTransferLocalization.string(forKey: "feedback.transferDeclined")
+        case .blockedByAnotherSession:
+            return FeatureTransferLocalization.string(forKey: "feedback.transferBlocked")
+        case .tooManyRequests:
+            return FeatureTransferLocalization.string(forKey: "feedback.transferRateLimited")
+        default:
+            // Rendered in the transfer card, so it goes through the same PIN redaction as the logs.
+            return SensitiveTextRedaction.redactedDescription(of: error)
+        }
+    }
+
+    /// Renders the per-file progress rows straight from the session's per-file maps.
+    ///
+    /// The previous shape derived every file's state from a single `currentItemIndex` ("everything
+    /// before me is done, everything after me is queued"). That is only true for a strictly
+    /// sequential loop; with a bounded pool several files are in flight at once and they finish out
+    /// of order, so state has to be tracked per file rather than inferred from position.
+    private static func makeSendRawFiles(session: ActiveSendSession) -> [TransferProgressRawFile] {
+        session.acceptedItems.enumerated().map { index, batchItem in
+            let fileID = batchItem.item.id
+            let status = session.statusByFileID[fileID] ?? .queued
+            let transferredBytes: Int64
+            switch status {
+            case .completed:
                 transferredBytes = batchItem.byteCount
-            } else if let currentItemIndex, itemIndex == currentItemIndex {
-                status = currentStatus ?? .queued
-                transferredBytes = status == .queued ? 0 : currentFileTransferredBytes
-            } else {
-                status = .queued
+            case .queued:
                 transferredBytes = 0
+            default:
+                transferredBytes = session.transferredBytesByFileID[fileID] ?? 0
             }
 
             return TransferProgressRawFile(
-                fileID: batchItem.item.id,
+                fileID: fileID,
                 displayName: batchItem.item.name,
                 fileURL: batchItem.item.fileURL,
                 order: index,
                 attemptIndex: 0,
                 state: status,
-                declaredTotalBytes: (currentItemIndex == itemIndex ? currentFileTotalBytes : batchItem.byteCount) ?? batchItem.byteCount,
+                declaredTotalBytes: batchItem.byteCount,
                 actualTransferredBytes: transferredBytes,
-                errorSummary: status == .failed ? errorSummary : nil
+                errorSummary: status == .failed ? session.errorByFileID[fileID] : nil
             )
         }
     }
@@ -919,13 +1365,35 @@ private struct ActiveSendSession {
     let client: LocalSendClient
     let traceID: String
     var acceptedItems: [SendBatchItem] = []
-    var currentItemIndex: Int = 0
-    var bytesTransferredBeforeCurrentFile: Int64 = 0
+    /// Bytes acknowledged per file, keyed by file id.
+    ///
+    /// Replaces the old `currentItemIndex` + `bytesTransferredBeforeCurrentFile` pair, which
+    /// assumed exactly one file was in flight and that files completed in enumeration order.
+    /// Neither holds under a concurrent pool. The batch total is the SUM of these values, so it
+    /// stays byte-accurate at any instant regardless of completion order.
+    var transferredBytesByFileID: [String: Int64] = [:]
+    var statusByFileID: [String: TransferFileProgress.Status] = [:]
+    var errorByFileID: [String: String] = [:]
+
+    var totalBatchBytes: Int64 {
+        acceptedItems.reduce(0) { $0 + $1.byteCount }
+    }
+
+    var transferredBytes: Int64 {
+        min(totalBatchBytes, transferredBytesByFileID.values.reduce(0, +))
+    }
 }
 
 private struct SendBatchItem {
     let item: StagedTransferItem
     let byteCount: Int64
+}
+
+/// Result of one file's upload. A value rather than a thrown error so a failure cannot cancel the
+/// sibling uploads running in the same task group.
+private struct SendFileOutcome: Sendable {
+    let fileID: String
+    let errorSummary: String?
 }
 
 private actor StreamBroadcaster<Value: Sendable> {

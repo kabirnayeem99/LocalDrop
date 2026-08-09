@@ -210,6 +210,10 @@ Request
 }
 ```
 
+> **Implementation note (`sha256` vs `hash`):** this document says `sha256`, but the reference Dart
+> implementation (`common/lib/model/dto/file_dto.dart`) reads and writes the JSON key `hash`.
+> LocalDrop decodes either key (preferring `hash`) and encodes `hash`.
+
 Response
 
 ```json5
@@ -348,6 +352,9 @@ Response
   }
 }
 ```
+
+> **Implementation note (`sha256` vs `hash`):** as in section 5.1, the reference Dart implementation
+> uses the JSON key `hash` here. LocalDrop decodes either key (preferring `hash`) and encodes `hash`.
 
 Errors
 

@@ -39,6 +39,17 @@ struct ReceiveView: View {
                 .labelsHidden()
                 .fixedSize()
                 .tint(accentTheme.primary)
+
+                // These modes decide whether the accept prompt appears at all, so the screen has to
+                // say what each one consents to — the labels alone cannot carry the favourites-only
+                // restriction or the message carve-out. Mirrors the existing
+                // `settings.autoAcceptFavoritesHelp` footer pattern.
+                Text(FeatureTransferLocalization.resource("receive.quickSaveHelp"))
+                    .appFont(.text(.caption, .regular))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: 420)
             }
             .padding(.top, Spacing.xxl)
         }

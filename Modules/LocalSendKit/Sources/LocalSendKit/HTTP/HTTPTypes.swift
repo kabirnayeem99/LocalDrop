@@ -124,12 +124,33 @@ public struct HTTPRequest: Sendable, Equatable {
     public var contentLength: Int64 {
         body.byteCount
     }
+}
 
-    public var wantsKeepAlive: Bool {
-        headers.first { $0.key.caseInsensitiveCompare("Connection") == .orderedSame }?.value
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased() == "keep-alive"
+/// The reference always answers a non-2xx with `{"message": "..."}` (`respondJson(code, message:)`
+/// in the Dart server, `core/src/http/server/error.rs`), and real LocalSend senders surface that
+/// text to the user. Modelled as a `Codable` DTO so `JSONEncoder` handles escaping.
+public struct ErrorResponseBody: Codable, Sendable, Equatable {
+    public var message: String
+
+    public init(message: String) {
+        self.message = message
     }
+}
+
+/// The one encoder every server-emitted JSON body goes through, so the wire format is configured
+/// in a single place: `.sortedKeys` for byte-stable output, no `.prettyPrinted` (the reference
+/// emits compact JSON).
+enum ServerJSONEncoding {
+    static let encoder: JSONEncoder = {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return encoder
+    }()
+
+    /// `Content-Type` for every JSON response. The reference's `respondJson` sets Dart's
+    /// `ContentType.json`, which serializes as `application/json; charset=utf-8`
+    /// (`app/lib/util/simple_server.dart:95-99`).
+    static let contentType = "application/json; charset=utf-8"
 }
 
 public struct HTTPResponse: Sendable, Equatable {
@@ -151,9 +172,40 @@ public struct HTTPResponse: Sendable, Equatable {
         HTTPResponse(statusCode: statusCode, body: .data(Data()))
     }
 
+    /// A non-2xx response carrying the reference's `{"message": "..."}` body.
+    ///
+    /// Non-throwing on purpose so error call sites stay a single expression: an encoding failure
+    /// (impossible for a one-`String` DTO) degrades to a body-less response with the same status
+    /// rather than turning a deliberate 4xx into a thrown 500.
+    ///
+    /// `Content-Length` is not set here — `HTTPResponseWriter.headerData(for:)` derives it from
+    /// `body.byteCount` for every status except 204/304, the same way the 200 JSON path relies on.
+    public static func error(statusCode: Int, message: String) -> HTTPResponse {
+        let body = (try? ServerJSONEncoding.encoder.encode(ErrorResponseBody(message: message))) ?? Data()
+        return HTTPResponse(
+            statusCode: statusCode,
+            headers: body.isEmpty ? [:] : ["Content-Type": ServerJSONEncoding.contentType],
+            body: .data(body)
+        )
+    }
+
     public var contentLength: Int64 {
         body.byteCount
     }
+}
+
+/// How the request body is delimited on the wire. Modelled explicitly rather than as an
+/// `Int64?` so that "no body" and "length unknown until the terminating chunk" are distinct
+/// states the connection loop is forced to handle — an optional length collapses them and
+/// silently produces a zero-byte body for every chunked upload.
+public enum BodyFraming: Sendable, Equatable {
+    /// No body: neither `Transfer-Encoding` nor `Content-Length` present.
+    case none
+    /// `Content-Length: n`.
+    case length(Int64)
+    /// `Transfer-Encoding` whose final coding is `chunked`. Per RFC 7230 §3.3.3 this wins over
+    /// any `Content-Length` also present.
+    case chunked
 }
 
 public enum HTTPParserError: Error, Equatable {
@@ -165,4 +217,6 @@ public enum HTTPParserError: Error, Equatable {
     case invalidEncoding
     case headersTooLarge
     case bodyTooLarge
+    /// A `Transfer-Encoding` we cannot decode (e.g. `gzip`). Maps to 501, never a 0-byte 200.
+    case unsupportedTransferEncoding
 }

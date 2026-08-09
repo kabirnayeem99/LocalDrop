@@ -26,6 +26,14 @@ public enum LocalSendClientError: Error, Equatable {
     case invalidStatusCode(Int)
     case invalidDownloadResponse
     case missingPeer
+    /// `/prepare-upload` responded 401 — a PIN is required, or the supplied PIN was wrong.
+    case pinRequired
+    /// `/prepare-upload` responded 403 — the recipient declined the transfer.
+    case rejected
+    /// `/prepare-upload` responded 409 — the recipient is busy with another session.
+    case blockedByAnotherSession
+    /// `/prepare-upload` responded 429 — too many requests.
+    case tooManyRequests
 }
 
 public struct FileTransferProgress: Equatable, Sendable {
@@ -107,6 +115,13 @@ public struct LocalSendClient: Sendable {
         self.defaultPeer = peer
     }
 
+    /// Builds a peer URL from a host that may be an IPv4 literal, a DNS name, or an IPv6 literal
+    /// with or without an interface zone (`fe80::1%en0`).
+    ///
+    /// `URLComponents.host` does the RFC 6874 escaping for us: the zone's `%` is percent-encoded to
+    /// `%25`, producing `http://[fe80::1%25en0]:53317/…`, which `URLSession` connects on the named
+    /// interface. So the host is handed over raw — pre-encoding it here would double-escape to
+    /// `%2525`.
     public static func makeURL(
         scheme: ProtocolType,
         host: String,
@@ -116,16 +131,51 @@ public struct LocalSendClient: Sendable {
     ) -> URL {
         var components = URLComponents()
         components.scheme = scheme.rawValue
-        components.host = host.contains(":") ? "[\(host)]" : host
+        components.host = bracketedHost(host)
         components.port = port
         components.path = path
         components.queryItems = query.isEmpty ? nil : query
-        return components.url!
+        if let url = components.url {
+            return url
+        }
+
+        // Unreachable for every host this kit produces (`NetworkEndpointAddress.canonicalHost`
+        // already rejects the characters that could break parsing), but `makeURL` is public and
+        // takes an arbitrary `String`. A caller-supplied host must not be able to trap the whole
+        // process: fall back to a host RFC 6761 guarantees never resolves, so the request fails at
+        // connect time — a recoverable, loggable error — instead of crashing.
+        var fallback = URLComponents()
+        fallback.scheme = scheme.rawValue
+        fallback.host = "invalid.invalid"
+        fallback.port = port
+        fallback.path = path
+        fallback.queryItems = components.queryItems
+        return fallback.url ?? URL(string: "\(scheme.rawValue)://invalid.invalid")!
     }
 
-    public func register(with info: RegisterInfo, to peer: RemotePeer? = nil) async throws -> RegisterInfo {
+    /// IPv6 literals need `[...]` in a URL authority; IPv4 literals and DNS names must not get it.
+    /// An already-bracketed host is left alone so a host that made a second trip through here
+    /// cannot become `[[fe80::1%en0]]`.
+    static func bracketedHost(_ host: String) -> String {
+        guard host.contains(":") else {
+            return host
+        }
+        guard host.hasPrefix("[") && host.hasSuffix("]") else {
+            return "[\(host)]"
+        }
+        return host
+    }
+
+    /// `apiVersion` mirrors `ApiRoute.register.target(peer)`, which picks the v1 path for a peer
+    /// advertising `version == "1.0"`. A v1-pinned peer has no `/api/localsend/v2/register` route,
+    /// so replying to its announcement on the v2 path would 404 and silently fall back to UDP.
+    public func register(
+        with info: RegisterInfo,
+        to peer: RemotePeer? = nil,
+        apiVersion: LocalSendKit.APIVersion = .v2
+    ) async throws -> RegisterInfo {
         let peer = try resolvePeer(peer)
-        let request = try jsonRequest(.post, path: "\(LocalSendKit.apiPrefix)/register", body: info, remoteAddress: peer.host)
+        let request = try jsonRequest(.post, path: "\(apiVersion.prefix)/register", body: info, remoteAddress: peer.host)
         let response = try await transport.send(request, to: peer)
         return try decode(response, as: RegisterInfo.self)
     }
@@ -153,8 +203,13 @@ public struct LocalSendClient: Sendable {
             remoteAddress: peer.host
         )
         let response = try await transport.send(request, to: peer)
+        // 204 ("no file transfer needed") is a *successful* outcome distinct from a 403 rejection:
+        // the recipient accepted the request but selected nothing. It must stay `nil`, not an error.
         if response.statusCode == 204 {
             return nil
+        }
+        if let error = Self.prepareUploadError(forStatusCode: response.statusCode) {
+            throw error
         }
         return try decode(response, as: PrepareUploadResponse.self)
     }
@@ -294,6 +349,27 @@ public struct LocalSendClient: Sendable {
     private func decode<T: Decodable>(_ response: HTTPResponse, as type: T.Type) throws -> T {
         try expectSuccess(response)
         return try decoder.decode(T.self, from: response.body.loadData())
+    }
+
+    /// The `/prepare-upload` error taxonomy from protocol section 4.1.
+    ///
+    /// Deliberately *not* applied inside `expectSuccess`: that helper is shared by `/cancel`,
+    /// `/download`, `/upload` and `/register`, where the same status codes mean different things
+    /// (an upload-time 403 is "invalid token or IP address", not "recipient declined"). Only
+    /// `/prepare-upload` gets this mapping; everything else keeps `.invalidStatusCode`.
+    private static func prepareUploadError(forStatusCode statusCode: Int) -> LocalSendClientError? {
+        switch statusCode {
+        case 401:
+            return .pinRequired
+        case 403:
+            return .rejected
+        case 409:
+            return .blockedByAnotherSession
+        case 429:
+            return .tooManyRequests
+        default:
+            return nil
+        }
     }
 
     private func expectSuccess(_ response: HTTPResponse) throws {

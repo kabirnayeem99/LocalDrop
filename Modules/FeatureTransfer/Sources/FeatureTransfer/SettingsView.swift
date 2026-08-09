@@ -12,6 +12,9 @@ struct SettingsView: View {
     @State private var showsIncomingPIN = false
     @State private var pinValidationMessage: String?
     @State private var deviceNameValidationMessage: String?
+    @State private var favoritePendingRevocation: FavoriteListItem?
+    @State private var favoriteBeingRenamed: FavoriteListItem?
+    @State private var renameDraft = ""
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     @Environment(\.appReducesMotion) private var appReduceMotion
     @Environment(\.accentTheme) private var accentTheme
@@ -79,6 +82,8 @@ struct SettingsView: View {
                 Text(FeatureTransferLocalization.resource("settings.section.receiving"))
             }
 
+            favoritesSection
+
             Section(FeatureTransferLocalization.resource("settings.section.sending")) {
                 Toggle(FeatureTransferLocalization.resource("settings.shareViaLinkAutoAccept"), isOn: $store.shareViaLinkAutoAccept)
                     .help(Text(FeatureTransferLocalization.resource("settings.shareViaLinkAutoAcceptHelp")))
@@ -112,6 +117,16 @@ struct SettingsView: View {
             pinDraft = store.incomingPIN
             deviceNameDraft = store.deviceName
         }
+        .modifier(
+            FavoriteRevocationConfirmation(store: store, pendingRevocation: $favoritePendingRevocation)
+        )
+        .modifier(
+            FavoriteRenameAlert(
+                store: store,
+                favoriteBeingRenamed: $favoriteBeingRenamed,
+                renameDraft: $renameDraft
+            )
+        )
         .alert(item: $securityDialog) { dialog in
             Alert(
                 title: Text(FeatureTransferLocalization.resource("settings.securityChanged")),
@@ -164,6 +179,58 @@ struct SettingsView: View {
         .onDisappear {
             hideIncomingPINTask?.cancel()
             hideIncomingPINTask = nil
+        }
+    }
+
+    /// The only place a favorite can be un-favorited when its device is gone from the network.
+    ///
+    /// Revocation is an explicit per-row button rather than swipe-to-delete: a swipe affordance is
+    /// undiscoverable on macOS, and this control tears down a persisted auto-accept grant, so it must
+    /// be visible and confirmed.
+    private var favoritesSection: some View {
+        Section {
+            if store.sortedFavorites.isEmpty {
+                Text(FeatureTransferLocalization.resource("settings.favorites.empty"))
+                    .appFont(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("settings-favorites-empty")
+            } else {
+                ForEach(store.sortedFavorites) { favorite in
+                    LabeledContent {
+                        HStack(spacing: Spacing.xs) {
+                            // The only way to reach `FavoriteDevice.aliasOverride`, which the model,
+                            // persistence and render path have always supported but nothing could set.
+                            Button {
+                                favoriteBeingRenamed = favorite
+                                renameDraft = store.aliasOverride(forFingerprint: favorite.fingerprint) ?? ""
+                            } label: {
+                                Text(FeatureTransferLocalization.resource("settings.favorites.rename"))
+                            }
+                            .accessibilityIdentifier("settings-favorite-rename-\(favorite.fingerprint)")
+
+                            Button(role: .destructive) {
+                                favoritePendingRevocation = favorite
+                            } label: {
+                                Text(FeatureTransferLocalization.resource("device.removeFavorite"))
+                            }
+                            .accessibilityIdentifier("settings-favorite-revoke-\(favorite.fingerprint)")
+                        }
+                    } label: {
+                        VStack(alignment: .leading, spacing: Spacing.xxs) {
+                            Text(favorite.displayName)
+                            Text(favorite.shortFingerprint)
+                                .appFont(.caption1)
+                                .monospaced()
+                                .foregroundStyle(.secondary)
+                                .environment(\.layoutDirection, .leftToRight)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            }
+        } header: {
+            Text(FeatureTransferLocalization.resource("settings.section.favorites"))
         }
     }
 
@@ -418,6 +485,58 @@ struct SettingsView: View {
     }
 }
 
+/// Confirmation step in front of favorite revocation.
+///
+/// Extracted into its own modifier rather than inlined in `SettingsView.body`: the settings form's
+/// modifier chain is already long enough that adding a `presenting:`-style dialog to it pushes the
+/// type checker past its limit.
+private struct FavoriteRevocationConfirmation: ViewModifier {
+    let store: TransferFeatureStore
+    @Binding var pendingRevocation: FavoriteListItem?
+
+    func body(content: Content) -> some View {
+        content.confirmationDialog(
+            Text(
+                FeatureTransferLocalization.format(
+                    "settings.favorites.revokeConfirmTitle",
+                    pendingRevocation?.displayName ?? ""
+                )
+            ),
+            isPresented: isPresented,
+            titleVisibility: .visible
+        ) {
+            Button(role: .destructive) {
+                if let fingerprint = pendingRevocation?.fingerprint {
+                    store.revokeFavorite(fingerprint: fingerprint)
+                }
+                pendingRevocation = nil
+            } label: {
+                Text(FeatureTransferLocalization.resource("device.removeFavorite"))
+            }
+            .accessibilityIdentifier("settings-favorite-revoke-confirm")
+
+            Button(role: .cancel) {
+                pendingRevocation = nil
+            } label: {
+                Text(FeatureTransferLocalization.resource("general.cancel"))
+            }
+        } message: {
+            Text(FeatureTransferLocalization.resource("settings.favorites.revokeConfirmMessage"))
+        }
+    }
+
+    private var isPresented: Binding<Bool> {
+        Binding(
+            get: { pendingRevocation != nil },
+            set: { newValue in
+                if newValue == false {
+                    pendingRevocation = nil
+                }
+            }
+        )
+    }
+}
+
 private struct AccentSwatchRow: View {
     @Binding var selection: AccentColorChoice
     @State private var hovering: AccentColorChoice?
@@ -481,5 +600,57 @@ enum SecurityDialog: Identifiable {
 
     var messageResource: LocalizedStringResource {
         FeatureTransferLocalization.resource(.init(messageKey))
+    }
+}
+
+
+/// Rename sheet for a favorite, extracted into a modifier for the same reason
+/// `FavoriteRevocationConfirmation` is: `SettingsView.body` is already at the limit of what the
+/// type checker will infer in reasonable time, and adding another inline `.alert` tips it over.
+///
+/// A plain SwiftUI `.alert` containing a `TextField` — no `NSAlert`, no AppKit sheet.
+private struct FavoriteRenameAlert: ViewModifier {
+    let store: TransferFeatureStore
+    @Binding var favoriteBeingRenamed: FavoriteListItem?
+    @Binding var renameDraft: String
+
+    private var isPresented: Binding<Bool> {
+        Binding(
+            get: { favoriteBeingRenamed != nil },
+            set: { presented in
+                if presented == false {
+                    favoriteBeingRenamed = nil
+                }
+            }
+        )
+    }
+
+    func body(content: Content) -> some View {
+        content.alert(
+            Text(FeatureTransferLocalization.resource("settings.favorites.rename")),
+            isPresented: isPresented,
+            presenting: favoriteBeingRenamed
+        ) { favorite in
+            TextField(
+                FeatureTransferLocalization.string(forKey: "settings.favorites.renamePlaceholder"),
+                text: $renameDraft
+            )
+            Button(FeatureTransferLocalization.resource("general.save")) {
+                // An empty draft CLEARS the override rather than being rejected — it is the only
+                // way back to the name the device broadcasts.
+                store.renameFavorite(fingerprint: favorite.fingerprint, alias: renameDraft)
+                dismiss()
+            }
+            Button(FeatureTransferLocalization.resource("general.cancel"), role: .cancel) {
+                dismiss()
+            }
+        } message: { _ in
+            Text(FeatureTransferLocalization.resource("settings.favorites.renamePrompt"))
+        }
+    }
+
+    private func dismiss() {
+        favoriteBeingRenamed = nil
+        renameDraft = ""
     }
 }

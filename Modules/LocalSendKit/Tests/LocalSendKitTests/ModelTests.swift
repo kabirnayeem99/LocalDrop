@@ -43,6 +43,48 @@ struct ModelTests {
         #expect(object?["metadata"] == nil)
     }
 
+    /// Mirrors `file_dto.dart:66-73`: a value with a `/` is decoded as a MIME type (`text/…` is
+    /// text), anything else is matched against the bare `FileType` enum case name.
+    @Test func fileDTOTextPayloadMatchesBothWireFormsOfTheTextFileType() {
+        func file(_ fileType: String) -> FileDto {
+            FileDto(id: "1", fileName: "a", size: 1, fileType: fileType)
+        }
+
+        // Bare enum name.
+        #expect(file("text").isTextPayload)
+        #expect(file("TEXT").isTextPayload)
+        #expect(file(" text ").isTextPayload)
+
+        // MIME form via `decodeFromMime`.
+        #expect(file("text/plain").isTextPayload)
+        #expect(file("Text/Markdown").isTextPayload)
+
+        // Everything else decodes to some other `FileType`.
+        #expect(file("image/jpeg").isTextPayload == false)
+        #expect(file("application/pdf").isTextPayload == false)
+        #expect(file("application/octet-stream").isTextPayload == false)
+        #expect(file("textual").isTextPayload == false)
+        #expect(file("").isTextPayload == false)
+    }
+
+    /// Mirrors `receive_session_state.dart:63-68`: a text file that *carries* a preview is a
+    /// message. A text file with no preview at all is a plain document.
+    @Test func fileDTOMessagePayloadRequiresTextTypeAndPresentPreview() {
+        func file(_ fileType: String, preview: String?) -> FileDto {
+            FileDto(id: "1", fileName: "a", size: 1, fileType: fileType, preview: preview)
+        }
+
+        #expect(file("text", preview: "hello").isMessagePayload)
+        #expect(file("text/plain", preview: "hello").isMessagePayload)
+        #expect(file("text", preview: nil).isMessagePayload == false)
+        // Presence, not content: the reference's `firstFile.preview != null` is satisfied by the
+        // empty string, so an empty message prompts instead of being quick-saved to disk.
+        #expect(file("text", preview: "").isMessagePayload)
+        #expect(file("text/plain", preview: "").isMessagePayload)
+        #expect(file("image/jpeg", preview: "base64-thumbnail").isMessagePayload == false)
+        #expect(file("image/jpeg", preview: "").isMessagePayload == false)
+    }
+
     @Test func dtoRoundTrips() throws {
         let response = PrepareDownloadResponse(
             info: InfoResponse(alias: "Mac", fingerprint: "AAA", download: true),

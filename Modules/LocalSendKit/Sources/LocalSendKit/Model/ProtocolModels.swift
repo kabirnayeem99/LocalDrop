@@ -23,7 +23,7 @@ public enum DeviceType: String, CaseIterable, Sendable, Codable {
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
-        try container.encode(rawValue.uppercased())
+        try container.encode(rawValue.lowercased())
     }
 }
 
@@ -79,6 +79,79 @@ public struct FileDto: Codable, Equatable, Sendable {
         self.preview = preview
         self.metadata = metadata
     }
+
+    /// The protocol document calls this field `sha256`, but the reference Dart `FileDto`
+    /// (`common/lib/model/dto/file_dto.dart`) reads and writes the JSON key `hash`. LocalDrop
+    /// therefore accepts either key on decode (preferring `hash`) and emits `hash` on encode,
+    /// while keeping the Swift property name `sha256` that call sites already use.
+    enum CodingKeys: String, CodingKey {
+        case id
+        case fileName
+        case size
+        case fileType
+        case hash
+        case sha256
+        case preview
+        case metadata
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        fileName = try container.decode(String.self, forKey: .fileName)
+        size = try container.decode(Int64.self, forKey: .size)
+        fileType = try container.decode(String.self, forKey: .fileType)
+        sha256 = try container.decodeIfPresent(String.self, forKey: .hash)
+            ?? container.decodeIfPresent(String.self, forKey: .sha256)
+        preview = try container.decodeIfPresent(String.self, forKey: .preview)
+        metadata = try container.decodeIfPresent(FileMetadata.self, forKey: .metadata)
+    }
+
+    /// Whether the reference implementation would classify this file's `fileType` as
+    /// `FileType.text`.
+    ///
+    /// LocalDrop keeps `fileType` as the raw wire string rather than an enum, so this mirrors the
+    /// reference decoder in `common/lib/model/dto/file_dto.dart:66-73` exactly, including its
+    /// branch on whether the value looks like a MIME type:
+    ///
+    /// - a value containing `/` goes through `decodeFromMime` (`file_dto.dart:104-117`), which maps
+    ///   any `text/…` MIME (e.g. `text/plain`) to `FileType.text`;
+    /// - any other value is matched against the bare enum case name, i.e. exactly `text`.
+    ///
+    /// Comparison is case-insensitive and ignores surrounding whitespace, which is more lenient than
+    /// the reference's exact match — deliberately, since misclassifying a text payload as a document
+    /// is the unsafe direction (it would let a message be written to disk without a prompt).
+    public var isTextPayload: Bool {
+        let normalized = fileType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if normalized.contains("/") {
+            return normalized.hasPrefix("text/")
+        }
+        return normalized == "text"
+    }
+
+    /// Whether this file is a message payload rather than a document: a text file that carries its
+    /// content in `preview`.
+    ///
+    /// The reference derives its `message` from exactly this (`app/lib/model/state/server/
+    /// receive_session_state.dart:63-68`) — a text file with no preview *at all* is a plain document
+    /// and is still eligible for quick save. Presence is what counts, not content: the reference's
+    /// null check treats an empty-string preview as a message, so an empty message prompts rather
+    /// than being written silently to disk. Matching that is also the safe direction.
+    public var isMessagePayload: Bool {
+        guard preview != nil else { return false }
+        return isTextPayload
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(fileName, forKey: .fileName)
+        try container.encode(size, forKey: .size)
+        try container.encode(fileType, forKey: .fileType)
+        try container.encodeIfPresent(sha256, forKey: .hash)
+        try container.encodeIfPresent(preview, forKey: .preview)
+        try container.encodeIfPresent(metadata, forKey: .metadata)
+    }
 }
 
 public struct RegisterInfo: Codable, Equatable, Sendable {
@@ -120,6 +193,22 @@ public struct RegisterInfo: Codable, Equatable, Sendable {
         self.port = port
         self.protocolType = protocolType
         self.download = download
+    }
+
+    /// The reference `RegisterDto` (`common/lib/model/dto/register_dto.dart:10-17`) makes every
+    /// field except `alias` and `fingerprint` optional, and resolves an absent `version` to
+    /// `fallbackProtocolVersion` (`register_dto.dart:38`). Encoding stays synthesized, so the
+    /// stored properties remain non-optional and no call site changes.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        alias = try container.decode(String.self, forKey: .alias)
+        version = try container.decodeIfPresent(String.self, forKey: .version) ?? LocalSendKit.fallbackProtocolVersion
+        deviceModel = try container.decodeIfPresent(String.self, forKey: .deviceModel)
+        deviceType = try container.decodeIfPresent(DeviceType.self, forKey: .deviceType)
+        fingerprint = try container.decode(String.self, forKey: .fingerprint)
+        port = try container.decodeIfPresent(Int.self, forKey: .port)
+        protocolType = try container.decodeIfPresent(ProtocolType.self, forKey: .protocolType)
+        download = try container.decodeIfPresent(Bool.self, forKey: .download) ?? false
     }
 
     public var asInfoResponse: InfoResponse {
@@ -185,7 +274,7 @@ public struct MulticastMessage: Codable, Equatable, Sendable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         alias = try container.decode(String.self, forKey: .alias)
-        version = try container.decode(String.self, forKey: .version)
+        version = try container.decodeIfPresent(String.self, forKey: .version) ?? LocalSendKit.fallbackProtocolVersion
         deviceModel = try container.decodeIfPresent(String.self, forKey: .deviceModel)
         deviceType = try container.decodeIfPresent(DeviceType.self, forKey: .deviceType)
         fingerprint = try container.decode(String.self, forKey: .fingerprint)
@@ -235,6 +324,66 @@ public struct PrepareUploadRequest: Codable, Equatable, Sendable {
         self.info = info
         self.files = files
     }
+
+    /// `prepare-upload` is the one route whose `info` object is NOT a `RegisterDto`.
+    ///
+    /// The reference decodes it as `InfoRegisterDto`, which exists solely "to be compatible with
+    /// v1" and whose comment reads *"The `fingerprint` does not exist in v1, so it is nullable
+    /// here"* (`common/lib/model/dto/info_register_dto.dart`). `toDevice` then resolves it with
+    /// `fingerprint ?? ''`.
+    ///
+    /// This is deliberately NOT gated on the request's API version: the reference uses the lenient
+    /// DTO for the v2 route too, so a v1-era sender reaching the v2 path is accepted either way.
+    /// `RegisterInfo`'s own decoder — used by `/register`, where the reference's `RegisterDto` does
+    /// require a fingerprint — is untouched.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        files = try container.decode([String: FileDto].self, forKey: .files)
+        do {
+            info = try container.decode(RegisterInfo.self, forKey: .info)
+        } catch {
+            info = try container.decode(LenientRegisterInfo.self, forKey: .info).registerInfo
+        }
+    }
+}
+
+/// The `InfoRegisterDto` shape: every field optional, including `fingerprint`. Used only as the
+/// fallback decode for `PrepareUploadRequest.info`.
+private struct LenientRegisterInfo: Decodable {
+    var alias: String
+    var version: String?
+    var deviceModel: String?
+    var deviceType: DeviceType?
+    var fingerprint: String?
+    var port: Int?
+    var protocolType: ProtocolType?
+    var download: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case alias
+        case version
+        case deviceModel
+        case deviceType
+        case fingerprint
+        case port
+        case protocolType = "protocol"
+        case download
+    }
+
+    var registerInfo: RegisterInfo {
+        RegisterInfo(
+            alias: alias,
+            version: version ?? LocalSendKit.fallbackProtocolVersion,
+            deviceModel: deviceModel,
+            deviceType: deviceType,
+            // `fingerprint ?? ''`, matching `InfoRegisterDtoExt.toDevice`. An empty fingerprint
+            // never matches a favorite, which is the safe direction.
+            fingerprint: fingerprint ?? "",
+            port: port,
+            protocolType: protocolType,
+            download: download ?? false
+        )
+    }
 }
 
 public struct PrepareUploadResponse: Codable, Equatable, Sendable {
@@ -281,5 +430,20 @@ public struct InfoResponse: Codable, Equatable, Sendable {
         self.deviceType = deviceType
         self.fingerprint = fingerprint
         self.download = download
+    }
+
+    /// The reference `InfoDto` (`common/lib/model/dto/info_dto.dart:9-14`) makes `version`,
+    /// `deviceModel`, `deviceType`, `fingerprint` and `download` all optional, resolving them to
+    /// `fallbackProtocolVersion`, `nil`, `nil`, `""` and `false` respectively
+    /// (`info_dto.dart:36-38`). A legacy peer that omits them used to fail to decode here and be
+    /// silently dropped by `LocalSendClient.info()`.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        alias = try container.decode(String.self, forKey: .alias)
+        version = try container.decodeIfPresent(String.self, forKey: .version) ?? LocalSendKit.fallbackProtocolVersion
+        deviceModel = try container.decodeIfPresent(String.self, forKey: .deviceModel)
+        deviceType = try container.decodeIfPresent(DeviceType.self, forKey: .deviceType)
+        fingerprint = try container.decodeIfPresent(String.self, forKey: .fingerprint) ?? ""
+        download = try container.decodeIfPresent(Bool.self, forKey: .download) ?? false
     }
 }

@@ -4,6 +4,12 @@ import SwiftUI
 struct TransferProgressSheet: View {
     let progress: ActiveTransferProgress
     let onCancel: () -> Void
+    /// Every transfer currently in flight. Sends to several devices now run concurrently, and a
+    /// sheet that showed only `progress` would silently hide the others.
+    var concurrentTransfers: [ActiveTransferProgress] = []
+    /// Cancels one transfer by id, for the per-row button. Cancelling one must leave the rest
+    /// running, so this is per-row rather than the sheet-wide `onCancel`.
+    var onCancelTransfer: (ActiveTransferProgress.ID) -> Void = { _ in }
 
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     @Environment(\.appReducesMotion) private var appReduceMotion
@@ -15,6 +21,55 @@ struct TransferProgressSheet: View {
     private var directionTint: Color { accentTheme.primary }
     private var isComplete: Bool { progress.status == .completed }
     private var overallProgressTarget: Double? { progress.overallProgressValue }
+
+    /// One row per in-flight transfer, shown only when there is more than one — with a single
+    /// transfer the detail above already says everything this would.
+    ///
+    /// Batch-level only (device, progress, state, cancel). Per-file bars stay in the detail
+    /// section for the focused transfer.
+    @ViewBuilder
+    private var concurrentTransfersSection: some View {
+        if concurrentTransfers.count > 1 {
+            VStack(alignment: .leading, spacing: Spacing.xs) {
+                Divider()
+                    .padding(.vertical, Spacing.xs)
+                ForEach(concurrentTransfers) { transfer in
+                    concurrentTransferRow(transfer)
+                }
+            }
+            .padding(.horizontal, Spacing.xs)
+        }
+    }
+
+    /// Split out of `concurrentTransfersSection` purely to keep each SwiftUI expression small
+    /// enough for the type checker.
+    private func concurrentTransferRow(_ transfer: ActiveTransferProgress) -> some View {
+        let symbol: String = transfer.direction == .sending ? "arrow.up.circle" : "arrow.down.circle"
+        let isFocused: Bool = transfer.id == progress.id
+        let isRunning: Bool = transfer.status == .running
+
+        return HStack(spacing: Spacing.sm) {
+            Image(systemName: symbol)
+                .foregroundStyle(isFocused ? directionTint : Color.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(transfer.counterpartName)
+                    .appFont(.subheadline)
+                    .lineLimit(1)
+                ProgressView(value: transfer.overallProgress)
+                    .progressViewStyle(.linear)
+            }
+            Button {
+                onCancelTransfer(transfer.id)
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Color.secondary)
+            .disabled(isRunning == false)
+            .accessibilityLabel(Text(FeatureTransferLocalization.resource("action.cancel")))
+        }
+        .accessibilityElement(children: .combine)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -46,6 +101,8 @@ struct TransferProgressSheet: View {
                 .padding(.bottom, Spacing.md)
             }
             .frame(maxHeight: 300)
+
+            concurrentTransfersSection
 
             if let secondaryStatusLine = progress.secondaryStatusLine {
                 Text(secondaryStatusLine)

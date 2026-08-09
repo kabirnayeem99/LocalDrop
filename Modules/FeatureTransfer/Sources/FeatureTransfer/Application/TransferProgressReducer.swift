@@ -14,7 +14,19 @@ actor TransferProgressReducer {
     private let alpha: Double
     private let minimumSpeedForETA: Double
     private let stalledInterval: TimeInterval
-    private var state: State?
+    /// Per-transfer reducer state, keyed by `transferID`.
+    ///
+    /// Was a single `State?` that reset whenever a raw event arrived for a different transfer.
+    /// That was correct only while exactly one transfer could be in flight; with concurrent sends
+    /// to several devices the two event streams interleave, and a shared slot made each transfer
+    /// discard the other's EWMA speed sample, byte high-water mark and start time on every
+    /// alternation — producing wildly wrong speed and ETA for both.
+    private var statesByTransferID: [String: State] = [:]
+
+    /// Bounds the map so a long session that sends to many devices cannot grow it without limit.
+    /// Terminal transfers are evicted eagerly; this is the backstop for anything that never
+    /// reaches a terminal event (a runtime restart mid-transfer, say).
+    private static let maximumTrackedTransfers = 32
 
     init(
         alpha: Double = 0.2,
@@ -27,12 +39,21 @@ actor TransferProgressReducer {
     }
 
     func reset() {
-        state = nil
+        statesByTransferID.removeAll()
+    }
+
+    /// Drops one transfer's state once it is finished with, so a completed send stops contributing
+    /// to the bound above.
+    func forget(transferID: String) {
+        statesByTransferID.removeValue(forKey: transferID)
     }
 
     func reduce(_ event: TransferProgressRawEvent) -> ActiveTransferProgress {
-        let previousState = state
+        let previousState = statesByTransferID[event.transferID]
         let previousSnapshot = previousState?.snapshot
+        // Now always true when a previous state exists at all — the lookup is already keyed by
+        // transfer id. Kept as a named condition so the merge/inheritance rules below still read
+        // as "inherit only from the same transfer".
         let isSameTransfer = previousSnapshot?.id == event.transferID
         let startedAt = previousSnapshot.map { snapshot in
             if isSameTransfer, snapshot.attemptID == event.attemptID {
@@ -88,7 +109,12 @@ actor TransferProgressReducer {
             lastProgressAtMonotonic: event.eventMonotonicTime
         )
 
-        state = State(
+        if statesByTransferID.count >= Self.maximumTrackedTransfers,
+           statesByTransferID[event.transferID] == nil,
+           let oldest = statesByTransferID.min(by: { $0.value.snapshot.lastProgressAtMonotonic < $1.value.snapshot.lastProgressAtMonotonic })?.key {
+            statesByTransferID.removeValue(forKey: oldest)
+        }
+        statesByTransferID[event.transferID] = State(
             snapshot: snapshot,
             lastActualTransferredBytes: actualTransferredBytes,
             lastSpeedSampleTime: speedState.lastSpeedSampleTime,
@@ -124,7 +150,9 @@ actor TransferProgressReducer {
             let resolvedStatus: TransferFileProgress.Status
             if status == .completed, raw.state == .queued {
                 resolvedStatus = .completed
-            } else if status == .failed, raw.state == .queued {
+            } else if status.isUnsuccessful, raw.state == .queued {
+                // `.pinRequired` / `.rejected` / `.blocked` / `.rateLimited` are distinguished at
+                // the transfer level for the user-facing copy; per file they are all just failures.
                 resolvedStatus = .failed
             } else if status == .canceled, raw.state == .queued {
                 resolvedStatus = .canceled
@@ -205,6 +233,14 @@ actor TransferProgressReducer {
             return .failed
         case .transferCanceled:
             return .canceled
+        case .transferPINRequired:
+            return .pinRequired
+        case .transferRejected:
+            return .rejected
+        case .transferBlocked:
+            return .blocked
+        case .transferRateLimited:
+            return .rateLimited
         }
     }
 

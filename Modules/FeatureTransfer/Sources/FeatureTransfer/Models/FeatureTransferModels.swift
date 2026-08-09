@@ -112,6 +112,50 @@ struct IncomingTransferFile: Identifiable, Equatable, Sendable {
     let name: String
     let size: String
     let symbol: String
+    /// Whether the wire `FileDto` was a message payload — a text file whose content travels in
+    /// `preview` (see `FileDto.isMessagePayload`).
+    ///
+    /// The raw `fileType` is still not carried — the disposition rule needs nothing else and the UI
+    /// renders it nowhere. Defaults to `false` (a plain document) so a caller that never saw a
+    /// `FileDto` keeps the quick-save behaviour.
+    let isMessagePayload: Bool
+
+    /// The message body, carried ONLY for a message payload.
+    ///
+    /// Previously dropped on the floor deliberately ("the feature layer has no reason to hold onto
+    /// it"). That stopped being true once messages started going to receive history instead of to
+    /// disk: the text IS the history entry, and the kit answers 204 without ever handing the bytes
+    /// over, so this is the only path the body can travel. `nil` for every non-message file.
+    let messageText: String?
+
+    init(
+        id: String,
+        name: String,
+        size: String,
+        symbol: String,
+        isMessagePayload: Bool = false,
+        messageText: String? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.size = size
+        self.symbol = symbol
+        self.isMessagePayload = isMessagePayload
+        self.messageText = messageText
+    }
+
+    /// Maps a wire `FileDto` onto the row the feature layer works with. Lives here rather than in
+    /// the runtime adapter so the message classification is exercised by feature-level tests.
+    init(file: FileDto, symbol: String) {
+        self.init(
+            id: file.id,
+            name: file.fileName,
+            size: ByteCountFormatter.string(fromByteCount: file.size, countStyle: .file),
+            symbol: symbol,
+            isMessagePayload: file.isMessagePayload,
+            messageText: file.isMessagePayload ? file.preview : nil
+        )
+    }
 }
 
 struct IncomingTransferRequest: Identifiable, Equatable, Sendable {
@@ -120,6 +164,139 @@ struct IncomingTransferRequest: Identifiable, Equatable, Sendable {
     let subtitle: String
     let sourceKind: DeviceKind
     let files: [IncomingTransferFile]
+    /// Sender certificate fingerprint, normalized to lowercase. Carried so the feature layer can
+    /// match the sender against the favorites store without reaching back into LocalSendKit.
+    /// Empty when the sender is unknown, which never matches a favorite.
+    let senderFingerprint: String
+
+    init(
+        id: String,
+        deviceName: String,
+        subtitle: String,
+        sourceKind: DeviceKind,
+        files: [IncomingTransferFile],
+        senderFingerprint: String = ""
+    ) {
+        self.id = id
+        self.deviceName = deviceName
+        self.subtitle = subtitle
+        self.sourceKind = sourceKind
+        self.files = files
+        self.senderFingerprint = FavoriteDevice.normalizedFingerprint(senderFingerprint)
+    }
+
+    /// Whether this request is a *message* rather than a file transfer.
+    ///
+    /// Mirrors the reference `ReceiveSessionState.message`
+    /// (`app/lib/model/state/server/receive_session_state.dart:63-68`): a request is a message only
+    /// when it carries exactly one file, that file is text, and its `preview` — the message body —
+    /// is present and non-empty. A lone `.txt` document with no preview is not a message and stays
+    /// eligible for quick save, matching the reference.
+    var isMessagePayload: Bool {
+        files.count == 1 && files[0].isMessagePayload
+    }
+
+    /// The message body when this request is a message, for the receive-history entry that stands
+    /// in for the file that is never written.
+    var messageText: String? {
+        guard isMessagePayload else { return nil }
+        return files[0].messageText
+    }
+}
+
+/// A device the user pinned, keyed by certificate fingerprint.
+///
+/// Fingerprints are lowercase hex on the wire (see `Fingerprint.make(from:)`), but peers — and
+/// LocalDrop identities persisted before that change — may still send uppercase. Every fingerprint
+/// entering this type is normalized with ``normalizedFingerprint(_:)`` so lookups are exact string
+/// comparisons on already-normalized keys, matching `Fingerprint.matches(_:_:)` semantics.
+struct FavoriteDevice: Codable, Equatable, Sendable, Identifiable {
+    /// Lowercased, whitespace-trimmed fingerprint. Also the identity of the favorite.
+    let fingerprint: String
+    /// User-chosen display name that wins over whatever the peer announces.
+    var aliasOverride: String?
+    /// Last alias seen from this peer, so a favorite still renders while it is offline.
+    var lastKnownAlias: String
+
+    var id: String { fingerprint }
+
+    init(fingerprint: String, aliasOverride: String? = nil, lastKnownAlias: String = "") {
+        self.fingerprint = Self.normalizedFingerprint(fingerprint)
+        self.aliasOverride = Self.normalizedAlias(aliasOverride)
+        self.lastKnownAlias = lastKnownAlias
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            fingerprint: try container.decode(String.self, forKey: .fingerprint),
+            aliasOverride: try container.decodeIfPresent(String.self, forKey: .aliasOverride),
+            lastKnownAlias: try container.decodeIfPresent(String.self, forKey: .lastKnownAlias) ?? ""
+        )
+    }
+
+    /// Name to render for this favorite. The user's override always wins; otherwise the caller's
+    /// live value (the alias the peer is announcing right now) wins over the cached
+    /// `lastKnownAlias`, which is only a fallback for a favorite with nothing live to show.
+    func displayName(fallback: String) -> String {
+        if let aliasOverride, aliasOverride.isEmpty == false {
+            return aliasOverride
+        }
+        if fallback.isEmpty == false {
+            return fallback
+        }
+        return lastKnownAlias
+    }
+
+    static func normalizedFingerprint(_ candidate: String) -> String {
+        candidate.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    /// Number of leading fingerprint characters shown as secondary text in the favorites list.
+    static let shortFingerprintLength = 8
+
+    /// Short, human-comparable prefix of a fingerprint. Two devices sharing an alias are told apart
+    /// by this, so it is rendered rather than the full 64-character hex string.
+    static func shortFingerprint(_ candidate: String) -> String {
+        String(normalizedFingerprint(candidate).prefix(shortFingerprintLength))
+    }
+
+    private static func normalizedAlias(_ candidate: String?) -> String? {
+        guard let trimmed = candidate?.trimmingCharacters(in: .whitespacesAndNewlines), trimmed.isEmpty == false else {
+            return nil
+        }
+        return trimmed
+    }
+}
+
+/// A favorited device as rendered in the settings favorites list.
+///
+/// Deliberately carries no online/offline or last-seen state: the list exists to manage devices that
+/// are *absent* — sold, reimaged, or a one-off guest — so a presence badge on every row would be
+/// noise on exactly the rows that matter most.
+struct FavoriteListItem: Identifiable, Equatable, Sendable {
+    /// Normalized fingerprint, and the identity of the row.
+    let fingerprint: String
+    /// Already-resolved name, produced by the same render path as the device list.
+    let displayName: String
+    /// Truncated fingerprint shown as secondary text so two devices sharing an alias are distinct.
+    let shortFingerprint: String
+
+    var id: String { fingerprint }
+}
+
+/// Why an incoming request was accepted without showing the prompt. Emitted as a log attribute so
+/// an auto-accept is distinguishable from a user accept after the fact.
+enum AutoAcceptReason: String, Equatable, Sendable {
+    case quickSave = "quick_save"
+    case quickSaveFavorites = "quick_save_favorites"
+    case favorite = "favorite"
+}
+
+/// What the feature layer decided to do with an inbound request before any UI is involved.
+enum IncomingRequestDisposition: Equatable, Sendable {
+    case prompt
+    case autoAccept(reason: AutoAcceptReason)
 }
 
 enum SendMode: String, CaseIterable, Codable, Identifiable, Sendable {
@@ -205,7 +382,15 @@ struct TransferFeedback: Identifiable, Equatable, Sendable {
 enum IncomingTransferDecision: Equatable, Sendable {
     case reject(requestID: String)
     case acceptAll(requestID: String)
-    case acceptSubset(requestID: String, fileIDs: Set<String>)
+    /// `desiredNames` maps fileID -> the name the user typed into the incoming-request sheet, for
+    /// the files they renamed. Only this case carries it: the rename affordance lives on the
+    /// per-file rows, and the sheet routes an all-selected accept through `acceptSubset` as soon as
+    /// any rename is present, so `acceptAll` (also the auto-accept and quick-save paths, where
+    /// nobody is at the keyboard) never has renames to carry.
+    ///
+    /// The names are untrusted user input and are sanitized in `LocalSendKit`, by the same code
+    /// path as a sender-supplied filename — not here.
+    case acceptSubset(requestID: String, fileIDs: Set<String>, desiredNames: [String: String] = [:])
     case noTransferNeeded(requestID: String)
 }
 
@@ -400,6 +585,25 @@ struct TransferFileProgress: Identifiable, Equatable, Sendable {
     }
 }
 
+/// A sender-side PIN prompt waiting on the user.
+///
+/// Holds no PIN, by design. The submitted value is handed straight to the in-flight
+/// `/prepare-upload` retry and dropped — it is never cached in memory across sends, never written
+/// to `UserDefaults`, and never put in the keychain.
+struct SendPINPrompt: Identifiable, Equatable, Sendable {
+    let id: UUID
+    let peerName: String
+    /// `false` once a PIN has been submitted and refused — the only way to tell "PIN required"
+    /// from "incorrect PIN", since the wire answers 401 for both.
+    let isFirstAttempt: Bool
+
+    init(id: UUID = UUID(), peerName: String, isFirstAttempt: Bool) {
+        self.id = id
+        self.peerName = peerName
+        self.isFirstAttempt = isFirstAttempt
+    }
+}
+
 struct ActiveTransferProgress: Identifiable, Equatable, Sendable {
     enum Direction: Sendable {
         case sending
@@ -411,12 +615,31 @@ struct ActiveTransferProgress: Identifiable, Equatable, Sendable {
         case completed
         case failed
         case canceled
+        /// `/prepare-upload` answered 401 — the recipient wants a PIN, or the one sent was wrong.
+        case pinRequired
+        /// `/prepare-upload` answered 403 — the recipient declined the transfer.
+        case rejected
+        /// `/prepare-upload` answered 409 — the recipient is busy with another session.
+        case blocked
+        /// `/prepare-upload` answered 429 — too many requests.
+        case rateLimited
 
         var isTerminal: Bool {
             switch self {
-            case .completed, .failed, .canceled:
+            case .completed, .failed, .canceled, .pinRequired, .rejected, .blocked, .rateLimited:
                 return true
             case .running:
+                return false
+            }
+        }
+
+        /// Whether this status means the batch ended without delivering the files. The per-file
+        /// rollup treats these exactly like `.failed`; only the user-facing copy differs.
+        var isUnsuccessful: Bool {
+            switch self {
+            case .failed, .pinRequired, .rejected, .blocked, .rateLimited:
+                return true
+            case .running, .completed, .canceled:
                 return false
             }
         }
@@ -519,7 +742,7 @@ struct ActiveTransferProgress: Identifiable, Equatable, Sendable {
                 fallbackStatus = .transferring
             case .completed:
                 fallbackStatus = .completed
-            case .failed:
+            case .failed, .pinRequired, .rejected, .blocked, .rateLimited:
                 fallbackStatus = .failed
             case .canceled:
                 fallbackStatus = .canceled
@@ -766,6 +989,10 @@ struct HistoryEntry: Identifiable, Codable, Sendable {
     let direction: TransferDirection
     let outcome: TransferOutcome
     let fileURL: URL?
+    /// A received text message rather than a file. `fileName` carries the message body itself
+    /// (matching the reference's `AddHistoryEntryAction(fileName: message, isMessage: true)`), and
+    /// `fileURL` is always nil because nothing was written to disk.
+    let isMessage: Bool
 
     init(
         id: UUID = UUID(),
@@ -775,7 +1002,8 @@ struct HistoryEntry: Identifiable, Codable, Sendable {
         timestamp: Date,
         direction: TransferDirection,
         outcome: TransferOutcome,
-        fileURL: URL? = nil
+        fileURL: URL? = nil,
+        isMessage: Bool = false
     ) {
         self.id = id
         self.fileName = fileName
@@ -785,6 +1013,24 @@ struct HistoryEntry: Identifiable, Codable, Sendable {
         self.direction = direction
         self.outcome = outcome
         self.fileURL = fileURL
+        self.isMessage = isMessage
+    }
+
+    /// Hand-written so a `history.json` produced before `isMessage` existed still decodes.
+    /// `HistoryPersistenceAdapter.load()` fails safe to `[]` on ANY decode error, so a synthesized
+    /// decoder here would silently erase the user's entire transfer history on first launch after
+    /// upgrading.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        fileName = try container.decode(String.self, forKey: .fileName)
+        counterpart = try container.decode(String.self, forKey: .counterpart)
+        size = try container.decode(String.self, forKey: .size)
+        timestamp = try container.decode(Date.self, forKey: .timestamp)
+        direction = try container.decode(TransferDirection.self, forKey: .direction)
+        outcome = try container.decode(TransferOutcome.self, forKey: .outcome)
+        fileURL = try container.decodeIfPresent(URL.self, forKey: .fileURL)
+        isMessage = try container.decodeIfPresent(Bool.self, forKey: .isMessage) ?? false
     }
 
     var subtitle: String {
@@ -1024,6 +1270,15 @@ enum AccentColorChoice: String, CaseIterable, Codable, Identifiable, Sendable {
 }
 
 struct TransferSettingsSnapshot: Codable, Equatable, Sendable {
+    /// Schema version of the persisted settings payload.
+    ///
+    /// Version 1 is the first build in which `quickSave`/`autoAcceptFavorites` actually suppress the
+    /// incoming-request prompt. Payloads written before that carry no `schemaVersion` key and may hold
+    /// a decorative `"quickSave":"on"` that was inert at the time it was written — accepting it verbatim
+    /// would silently upgrade those installs to always-auto-accept. See ``init(from:)``.
+    static let currentSchemaVersion = 1
+
+    var schemaVersion: Int
     var quickSave: QuickSaveMode
     var appearance: AppearanceSetting
     var accentColor: AccentColorChoice
@@ -1037,6 +1292,7 @@ struct TransferSettingsSnapshot: Codable, Equatable, Sendable {
     var protocolSettings: TransferProtocolSettings
 
     enum CodingKeys: String, CodingKey {
+        case schemaVersion
         case quickSave
         case appearance
         case accentColor
@@ -1061,8 +1317,10 @@ struct TransferSettingsSnapshot: Codable, Equatable, Sendable {
         autoAcceptFavorites: Bool,
         sendMode: SendMode = .single,
         shareViaLinkAutoAccept: Bool = false,
-        protocolSettings: TransferProtocolSettings
+        protocolSettings: TransferProtocolSettings,
+        schemaVersion: Int = TransferSettingsSnapshot.currentSchemaVersion
     ) {
+        self.schemaVersion = schemaVersion
         self.quickSave = quickSave
         self.appearance = appearance
         self.accentColor = accentColor
@@ -1078,6 +1336,8 @@ struct TransferSettingsSnapshot: Codable, Equatable, Sendable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedSchemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 0
+        schemaVersion = Self.currentSchemaVersion
         quickSave = try container.decode(QuickSaveMode.self, forKey: .quickSave)
         appearance = try container.decode(AppearanceSetting.self, forKey: .appearance)
         accentColor = try container.decodeIfPresent(AccentColorChoice.self, forKey: .accentColor) ?? .medinaEmerald
@@ -1089,10 +1349,19 @@ struct TransferSettingsSnapshot: Codable, Equatable, Sendable {
         sendMode = try container.decodeIfPresent(SendMode.self, forKey: .sendMode) ?? .single
         shareViaLinkAutoAccept = try container.decodeIfPresent(Bool.self, forKey: .shareViaLinkAutoAccept) ?? false
         protocolSettings = try container.decode(TransferProtocolSettings.self, forKey: .protocolSettings)
+
+        // One-time migration: a payload written before schema 1 cannot be trusted to express intent
+        // about auto-accept, because neither flag suppressed the prompt when it was written. Force the
+        // prompting configuration regardless of what the ship defaults happen to be today.
+        if decodedSchemaVersion < Self.currentSchemaVersion {
+            quickSave = .off
+            autoAcceptFavorites = false
+        }
     }
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(Self.currentSchemaVersion, forKey: .schemaVersion)
         try container.encode(quickSave, forKey: .quickSave)
         try container.encode(appearance, forKey: .appearance)
         try container.encode(accentColor, forKey: .accentColor)
@@ -1106,16 +1375,19 @@ struct TransferSettingsSnapshot: Codable, Equatable, Sendable {
         try container.encode(protocolSettings, forKey: .protocolSettings)
     }
 
+    /// Ship defaults. Auto-accept is off in both forms, matching the LocalSend reference
+    /// (`persistence_provider.dart`: `isQuickSave()` and `isQuickSaveFromFavorites()` both fall back to
+    /// false). Files from an arbitrary LAN peer must never land on disk without a prompt.
     static func `default`(deviceName: String, saveLocation: URL) -> Self {
         Self(
-            quickSave: .on,
+            quickSave: .off,
             appearance: .system,
             accentColor: .medinaEmerald,
             language: .system,
             minimizeToMenuBar: false,
             launchAtLogin: true,
             reduceMotion: false,
-            autoAcceptFavorites: true,
+            autoAcceptFavorites: false,
             sendMode: .single,
             shareViaLinkAutoAccept: false,
             protocolSettings: TransferProtocolSettings(

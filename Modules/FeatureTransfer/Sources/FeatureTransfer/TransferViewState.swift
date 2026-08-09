@@ -45,12 +45,16 @@ enum QuickSaveMode: String, CaseIterable, Identifiable, Codable, Sendable {
 
 enum ActiveSheet: Identifiable, Equatable {
     case incoming
+    /// Sender-side PIN entry. Its own sheet rather than an inline field in `.progress`: the 401
+    /// arrives during `/prepare-upload`, before any bytes move, so there is no progress to attach to.
+    case pinEntry
     case progress
 
     var id: Int {
         switch self {
         case .incoming: 0
-        case .progress: 1
+        case .pinEntry: 1
+        case .progress: 2
         }
     }
 }

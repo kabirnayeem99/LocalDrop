@@ -3,7 +3,25 @@ import DesignSystem
 
 struct DeviceCardView: View {
     let device: NearbyPeerItem
+    /// Name to render — a favorite's `aliasOverride` when one is set, otherwise the announced alias.
+    let displayName: String
+    let isFavorite: Bool
     let action: () -> Void
+    let toggleFavorite: () -> Void
+
+    init(
+        device: NearbyPeerItem,
+        displayName: String? = nil,
+        isFavorite: Bool = false,
+        toggleFavorite: @escaping () -> Void = {},
+        action: @escaping () -> Void
+    ) {
+        self.device = device
+        self.displayName = displayName ?? device.name
+        self.isFavorite = isFavorite
+        self.toggleFavorite = toggleFavorite
+        self.action = action
+    }
 
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     @Environment(\.appReducesMotion) private var appReduceMotion
@@ -13,6 +31,42 @@ struct DeviceCardView: View {
     @State private var showsAvailabilityPulse = false
 
     var body: some View {
+        // The favorite toggle is a sibling layered above the card button rather than nested inside
+        // its label: a Button inside another Button's label does not reliably get its own hit test.
+        ZStack(alignment: .topTrailing) {
+            cardButton
+            favoriteToggle
+                .padding(.top, Spacing.xs)
+                .padding(.trailing, Spacing.xs)
+        }
+        // Hover scale belongs to the whole row, not just the card: scaling the card alone slid it out
+        // from under a stationary star.
+        .scaleEffect(reduceMotion ? 1 : (isHovering ? 1.015 : 1))
+    }
+
+    private var favoriteToggle: some View {
+        Button(action: toggleFavorite) {
+            Image(systemName: isFavorite ? "star.fill" : "star")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(isFavorite ? accentTheme.primary : Color.secondary)
+                // Glyph stays 12pt; only the hit target grows, keeping it clear of the send affordance.
+                .frame(width: 28, height: 28)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text(favoriteLabel))
+        .help(Text(favoriteLabel))
+        // Normalized to match the favorites store's lowercase keys; the wire fingerprint may be uppercase.
+        .accessibilityIdentifier("device-favorite-toggle-\(FavoriteDevice.normalizedFingerprint(device.id))")
+    }
+
+    private var favoriteLabel: LocalizedStringResource {
+        isFavorite
+            ? FeatureTransferLocalization.resource("device.removeFavorite")
+            : FeatureTransferLocalization.resource("device.addFavorite")
+    }
+
+    private var cardButton: some View {
         Button(action: action) {
             HStack(spacing: Spacing.sm) {
                 ZStack(alignment: .topTrailing) {
@@ -34,7 +88,7 @@ struct DeviceCardView: View {
                 }
 
                 VStack(alignment: .leading, spacing: Spacing.xxs) {
-                    Text(device.name)
+                    Text(displayName)
                         .appFont(.headline)
                         .foregroundStyle(.primary)
                     Text(device.subtitle)
@@ -68,7 +122,6 @@ struct DeviceCardView: View {
                 radius: (isHovering && !reduceMotion) ? 8 : 0,
                 y: (isHovering && !reduceMotion) ? 3 : 0
             )
-            .scaleEffect(reduceMotion ? 1 : (isHovering ? 1.015 : 1))
         }
         .buttonStyle(DeviceCardButtonStyle(reduceMotion: reduceMotion))
         .onHover { hovering in

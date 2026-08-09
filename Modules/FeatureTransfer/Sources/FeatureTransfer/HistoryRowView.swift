@@ -92,7 +92,12 @@ struct HistoryRowView: View {
     }
 
     private var directionSymbol: String {
-        entry.direction == .received ? "arrow.down" : "arrow.up"
+        // A received message never became a file, so the file-transfer arrow would misdescribe it.
+        // Symbol-only: no new user-facing copy, hence no 17-locale `.xcstrings` change.
+        if entry.isMessage {
+            return "text.bubble"
+        }
+        return entry.direction == .received ? "arrow.down" : "arrow.up"
     }
 
     private var iconTint: Color {

@@ -88,6 +88,10 @@ public final class LocalSendNode: @unchecked Sendable {
         self.runtimeStateStore = runtimeStateStore
 
         let inventory = runtimeConfiguration.downloadInventoryProvider
+        // Created before the server because the server's `peerRegistrationObserver` has to reach
+        // the discovery service, which does not exist yet. Same late-binding trick already used for
+        // the multicast listener callback below.
+        let callbackBox = DiscoveryCallbackBox()
         self.server = LocalSendServer(
             configuration: LocalSendServerConfiguration(
                 registerInfo: runtimeConfiguration.registerInfo,
@@ -111,20 +115,29 @@ public final class LocalSendNode: @unchecked Sendable {
                         state.pendingIncomingRequest = pendingRequest
                     }
                 },
+                peerRegistrationObserver: { callerIP, info in
+                    await callbackBox.service?.registerInboundPeer(host: callerIP, info: info)
+                },
                 logger: logger
             )
         )
-        self.serverRuntime = LocalSendServerRuntime(
+        let serverRuntime = LocalSendServerRuntime(
             server: server,
             tlsConfiguration: LocalSendTLSConfiguration(identity: localIdentity),
             protocolType: runtimeConfiguration.protocolType,
             port: runtimeConfiguration.tcpPort,
             limits: runtimeConfiguration.limits,
-            temporaryDirectory: runtimeConfiguration.storageDirectory,
+            // NOT `storageDirectory` itself: staging must be a directory we exclusively own (so it
+            // can be swept) that is still on the same volume as the destination (so the final move
+            // is an atomic rename). A child rather than a sibling, because a sibling is not
+            // guaranteed to be on the same volume — or writable — when the save directory is a
+            // mount point or the user's home. `ReceiveSession.resolveDestination` is what keeps a
+            // sender-supplied name from resolving into it. See `UploadStagingArea`.
+            temporaryDirectory: UploadStagingArea.url(inside: runtimeConfiguration.storageDirectory),
             logger: logger
         )
+        self.serverRuntime = serverRuntime
 
-        let callbackBox = DiscoveryCallbackBox()
         let discoveryService = DiscoveryService(
             listener: try MulticastListenerRuntime(
                 multicastHost: runtimeConfiguration.multicastHost,
@@ -139,13 +152,85 @@ public final class LocalSendNode: @unchecked Sendable {
                 port: runtimeConfiguration.multicastPort,
                 logger: logger
             ),
-            registerResponder: { _ in
-                false
+            // Answer an announcement over TCP `POST /register` first, exactly as
+            // `multicast_discovery.dart:_answerAnnouncement` does. Returning `false` on any failure
+            // hands off to `DiscoveryService`'s existing UDP fallback, so a peer on a network where
+            // TCP back-connections are blocked is still answered.
+            registerResponder: { [clientFactory] peer in
+                // The announcement carried our advertised `registerInfo`, whose port is the
+                // CONFIGURED one (often 0 = "any"). The peer has to be told the port we actually
+                // bound, or it will call back to the wrong place.
+                guard let endpoint = try? await serverRuntime.waitUntilReady() else {
+                    return false
+                }
+                var localInfo = runtimeConfiguration.registerInfo
+                localInfo.port = endpoint.port
+                localInfo.protocolType = endpoint.protocolType
+
+                // `RegisterInfo.port` is optional on the wire; `InfoRegisterDtoExt.toDevice`
+                // resolves an absent port to the receiver's own, so the shared default port is the
+                // faithful fallback.
+                let peerPort = peer.info.port ?? Int(runtimeConfiguration.multicastPort)
+                let client = clientFactory.makeClient(
+                    host: peer.host,
+                    port: peerPort,
+                    protocolType: peer.info.protocolType ?? .https,
+                    fingerprint: peer.info.fingerprint
+                )
+                let apiVersion: LocalSendKit.APIVersion =
+                    peer.info.version == LocalSendKit.fallbackProtocolVersion ? .v1 : .v2
+                do {
+                    _ = try await client.register(with: localInfo, apiVersion: apiVersion)
+                    logger.emit(
+                        level: .debug,
+                        event: "discovery.register_reply.succeeded",
+                        scope: "LocalSendNode",
+                        attributes: [
+                            .string("peer.alias", peer.info.alias),
+                            .string("peer.host", peer.host),
+                            .string("localsend.api_version", apiVersion.rawValue)
+                        ]
+                    )
+                    return true
+                } catch {
+                    logger.emit(
+                        level: .debug,
+                        event: "discovery.register_reply.failed",
+                        scope: "LocalSendNode",
+                        attributes: [
+                            .string("peer.alias", peer.info.alias),
+                            .string("peer.host", peer.host),
+                            .string("error.message", error.localizedDescription),
+                            .string("error.type", String(describing: type(of: error)))
+                        ]
+                    )
+                    return false
+                }
             },
             peersObserver: { peers in
                 await runtimeStateStore.update { state in
                     state.discoveredPeers = peers
                 }
+            },
+            // Peers that launch after us never saw our start-up announcement. Re-announcing on a
+            // timer is what makes us discoverable to them without requiring a restart.
+            reannounce: {
+                guard let endpoint = try? await serverRuntime.waitUntilReady() else {
+                    return
+                }
+                let info = runtimeConfiguration.registerInfo
+                let message = MulticastMessage(
+                    alias: info.alias,
+                    version: info.version,
+                    deviceModel: info.deviceModel,
+                    deviceType: info.deviceType,
+                    fingerprint: info.fingerprint,
+                    port: endpoint.port,
+                    protocolType: endpoint.protocolType,
+                    download: info.download,
+                    announce: true
+                )
+                try? await callbackBox.service?.announce(message)
             },
             logger: logger
         )
@@ -251,6 +336,18 @@ public final class LocalSendNode: @unchecked Sendable {
         }
     }
 
+    /// Ids of prompts withdrawn by the network side (sender-initiated `/cancel` during the
+    /// accept/decline prompt). Additive to `incomingTransferRequests()` so that stream's element
+    /// type — and every consumer of it — is untouched.
+    public func incomingTransferRequestWithdrawals() async -> AsyncStream<String> {
+        if let incomingRequestBridge = runtimeConfiguration.incomingRequestBridge {
+            return await incomingRequestBridge.withdrawals()
+        }
+        return AsyncStream { continuation in
+            continuation.finish()
+        }
+    }
+
     public func respondToIncomingTransfer(
         requestID: String,
         decision: IncomingTransferDecision
@@ -263,6 +360,15 @@ public final class LocalSendNode: @unchecked Sendable {
 
     public func makeClient(host: String, port: Int, protocolType: ProtocolType, fingerprint: String) -> LocalSendClient {
         clientFactory.makeClient(host: host, port: port, protocolType: protocolType, fingerprint: fingerprint)
+    }
+
+    /// Tears down the live receive session because the LOCAL user cancelled it, and publishes the
+    /// resulting `.canceled` snapshot through `observeRuntime()`.
+    ///
+    /// Returns `false` when no live session matches `sessionId` (already finished, already
+    /// cancelled, or never existed), which makes repeated calls harmless.
+    public func cancelReceiveSession(sessionId: String) async -> Bool {
+        await server.cancelReceiveSession(sessionId: sessionId)
     }
 }
 

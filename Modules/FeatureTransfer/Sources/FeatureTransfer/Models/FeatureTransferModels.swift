@@ -49,6 +49,19 @@ struct NearbyPeerItem: Identifiable, Hashable, Sendable {
     let protocolType: ProtocolType?
     let port: Int?
     let supportsDownloads: Bool
+    /// The protocol version this peer announced, carried through so the send path can route to the
+    /// version's paths (`common/lib/api_route_builder.dart:28-36`).
+    ///
+    /// Defaults to `LocalSendKit.fallbackProtocolVersion` — NOT to our own `protocolVersion`. A peer
+    /// that omits `version` on the wire is a v1-era peer (`common/lib/constants.dart:18`,
+    /// `register_dto.dart:38`), and resolving it to `"2.1"` would mislabel exactly the legacy peers
+    /// this change exists to reach.
+    let protocolVersion: String
+
+    /// `apiVersion` is derived, never stored, so the `== "1.0"` decision stays in one place.
+    var apiVersion: LocalSendKit.APIVersion {
+        LocalSendKit.APIVersion(protocolVersion: protocolVersion)
+    }
 
     init(
         id: ID,
@@ -59,7 +72,8 @@ struct NearbyPeerItem: Identifiable, Hashable, Sendable {
         fingerprint: String,
         protocolType: ProtocolType?,
         port: Int?,
-        supportsDownloads: Bool
+        supportsDownloads: Bool,
+        protocolVersion: String = LocalSendKit.fallbackProtocolVersion
     ) {
         self.id = id
         self.host = host
@@ -70,6 +84,7 @@ struct NearbyPeerItem: Identifiable, Hashable, Sendable {
         self.protocolType = protocolType
         self.port = port
         self.supportsDownloads = supportsDownloads
+        self.protocolVersion = protocolVersion
     }
 
     init(peer: DiscoveredPeer) {
@@ -83,7 +98,10 @@ struct NearbyPeerItem: Identifiable, Hashable, Sendable {
             fingerprint: info.fingerprint,
             protocolType: info.protocolType,
             port: info.port,
-            supportsDownloads: info.download
+            supportsDownloads: info.download,
+            // `RegisterInfo` decoding already substitutes `fallbackProtocolVersion` for an absent
+            // `version`, so this is the announced value verbatim.
+            protocolVersion: info.version
         )
     }
 
@@ -202,6 +220,17 @@ struct IncomingTransferRequest: Identifiable, Equatable, Sendable {
         guard isMessagePayload else { return nil }
         return files[0].messageText
     }
+}
+
+/// An inbound prompt appearing, or that same prompt being withdrawn by the network side, on one
+/// ordered stream.
+///
+/// The feature-level twin of `LocalSendKit.IncomingTransferRequestEvent`: it has to be a distinct
+/// type because it carries *this* module's `IncomingTransferRequest`, which merely shares a name
+/// with the kit's. `LocalSendRuntimeAdapter` maps one to the other.
+enum InboundRequestEvent: Sendable, Equatable {
+    case request(IncomingTransferRequest)
+    case withdrawal(requestID: String)
 }
 
 /// A device the user pinned, keyed by certificate fingerprint.
@@ -1145,7 +1174,9 @@ struct TransferProtocolSettings: Codable, Equatable, Sendable {
         try container.encode(deviceName, forKey: .deviceName)
         try container.encode(tcpPort, forKey: .tcpPort)
         try container.encode(requirePIN, forKey: .requirePIN)
-        try container.encode(Self.normalizedIncomingPIN(from: incomingPIN) ?? Self.generateIncomingPIN(), forKey: .incomingPIN)
+        // A pure dump of stored state: repairing an invalid PIN is the store's job
+        // (`resolvedIncomingPIN`/`ensureIncomingPIN()`) and the decoder's, not the encoder's.
+        try container.encode(incomingPIN, forKey: .incomingPIN)
         try container.encode(allowDownloads, forKey: .allowDownloads)
         try container.encode(useHTTPS, forKey: .useHTTPS)
         try container.encode(saveLocation, forKey: .saveLocation)

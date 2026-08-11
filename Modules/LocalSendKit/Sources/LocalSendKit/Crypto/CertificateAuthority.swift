@@ -77,8 +77,13 @@ public struct CertificateAuthority: Sendable {
 
     public func loadOrCreateIdentity(now: Date = .now) throws -> LocalIdentity {
         if let existing = try store.loadIdentity() {
-            try validate(certificateDER: existing.certificateDER, now: now)
-            return existing
+            do {
+                try validate(certificateDER: existing.certificateDER, now: now)
+                return existing
+            } catch CertificateAuthorityError.expiredCertificate {
+                // Expired certificates are a normal lifecycle event: regenerate below.
+                // Other validation errors indicate corruption/tampering and propagate.
+            }
         }
 
         let identity = try generateIdentity(now: now)

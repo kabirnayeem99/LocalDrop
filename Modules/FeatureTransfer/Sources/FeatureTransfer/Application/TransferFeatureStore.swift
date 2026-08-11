@@ -90,16 +90,6 @@ final class TransferFeatureStore {
     nonisolated(unsafe) private var pendingProgressSnapshot: ActiveTransferProgress?
     @ObservationIgnored
     nonisolated(unsafe) private var authoritativeActiveTransfer: ActiveTransferProgress?
-    /// Request IDs whose withdrawal arrived before the request itself.
-    ///
-    /// The inbound-request stream and the withdrawal stream are consumed by two independent tasks with
-    /// no ordering guarantee between them, so a sender that cancels immediately can have its withdrawal
-    /// observed first. Without this, `withdrawIncomingRequest(id:)` would find nothing to clear and the
-    /// request task would then prompt for — or auto-accept — an already-dead request.
-    /// Bounded so a peer spamming withdrawals for IDs that never arrive cannot grow it without limit.
-    @ObservationIgnored
-    private var withdrawnRequestIDs: [String] = []
-    private static let maxTrackedWithdrawnRequestIDs = 32
     @ObservationIgnored
     nonisolated(unsafe) private var autoAcceptResponseTasks: [UUID: Task<Void, Never>] = [:]
     /// Suspends the in-flight `/prepare-upload` retry loop while the PIN sheet is up.
@@ -277,8 +267,10 @@ final class TransferFeatureStore {
         activeTransfer = nil
         logger.emit(level: .info, event: "app.runtime.stop.requested", scope: "TransferFeatureStore")
         // Shut the runtime down BEFORE tearing the observers down: the runtime emits terminal
-        // progress/withdrawal events while stopping, and cancelling the observation tasks first
-        // would drop them on the floor.
+        // progress events while stopping, and cancelling the observation tasks first would drop
+        // them on the floor. (A pending incoming-request prompt is resolved via `finishPending()`
+        // on the kit side, which emits no withdrawal event at all, so there is no terminal
+        // withdrawal to lose here either way.)
         await runtime.stop()
         cancelObservationAndAutoAcceptTasks()
         // Without this, `start()`'s `guard hasStarted == false` short-circuits the next start and
@@ -742,18 +734,6 @@ final class TransferFeatureStore {
     /// Entry point for every inbound request. Auto-accepted requests never touch `incomingRequest`,
     /// so no prompt is presented — not even for a frame.
     func handleIncomingRequest(_ request: IncomingTransferRequest) {
-        // Out-of-order withdrawal: the sender already canceled this request before we observed it.
-        // Never prompt for it and never auto-accept it.
-        if consumeWithdrawal(id: request.id) {
-            logger.emit(
-                level: .notice,
-                event: "transfer.incoming.withdrawn_before_arrival",
-                scope: "TransferFeatureStore",
-                attributes: [.string("transfer.request_id", request.id)]
-            )
-            return
-        }
-
         switch disposition(for: request) {
         case .autoAccept(let reason):
             autoAcceptIncomingRequest(request, reason: reason)
@@ -856,12 +836,10 @@ final class TransferFeatureStore {
     /// `activeSheet` is derived from `incomingRequest`, so nil-ing it dismisses the sheet with no
     /// view changes and no AppKit.
     func withdrawIncomingRequest(id: String) {
-        guard incomingRequest?.id == id else {
-            // The request has not been observed yet (or was already resolved). Remember the withdrawal
-            // so `handleIncomingRequest(_:)` can drop it if it still arrives.
-            rememberWithdrawal(id: id)
-            return
-        }
+        // Not the displayed prompt: the request was already resolved, superseded by a newer one, or
+        // auto-accepted and therefore never displayed. Ignored — and it cannot be a withdrawal that
+        // *overtook* its request, because both arrive on one ordered stream consumed by one task.
+        guard incomingRequest?.id == id else { return }
         incomingRequest = nil
         logger.emit(
             level: .notice,
@@ -876,24 +854,6 @@ final class TransferFeatureStore {
                 tone: .neutral
             )
         )
-    }
-
-    /// Records a withdrawal whose request has not been seen yet, evicting the oldest entry once the
-    /// bound is reached.
-    private func rememberWithdrawal(id: String) {
-        guard id.isEmpty == false, withdrawnRequestIDs.contains(id) == false else { return }
-        withdrawnRequestIDs.append(id)
-        if withdrawnRequestIDs.count > Self.maxTrackedWithdrawnRequestIDs {
-            withdrawnRequestIDs.removeFirst(withdrawnRequestIDs.count - Self.maxTrackedWithdrawnRequestIDs)
-        }
-    }
-
-    /// Returns `true` when `id` had been withdrawn ahead of time, consuming the record so a later
-    /// request reusing the same ID is not swallowed.
-    private func consumeWithdrawal(id: String) -> Bool {
-        guard let index = withdrawnRequestIDs.firstIndex(of: id) else { return false }
-        withdrawnRequestIDs.remove(at: index)
-        return true
     }
 
     func acceptIncomingRequest() {
@@ -1214,18 +1174,20 @@ final class TransferFeatureStore {
                     self.refreshFavoriteAliases()
                 }
             },
+            // One task for prompts AND their withdrawals: the runtime hands both over on a single
+            // ordered stream, and consuming it from a single task is what preserves that order all
+            // the way to `incomingRequest`. Splitting this back into two tasks would reintroduce
+            // the reordering the merged stream exists to prevent.
             Task { [weak self] in
                 guard let self else { return }
-                let stream = await self.runtime.inboundRequests()
-                for await request in stream {
-                    self.handleIncomingRequest(request)
-                }
-            },
-            Task { [weak self] in
-                guard let self else { return }
-                let stream = await self.runtime.inboundRequestWithdrawals()
-                for await requestID in stream {
-                    self.withdrawIncomingRequest(id: requestID)
+                let stream = await self.runtime.inboundRequestEvents()
+                for await event in stream {
+                    switch event {
+                    case .request(let request):
+                        self.handleIncomingRequest(request)
+                    case .withdrawal(let id):
+                        self.withdrawIncomingRequest(id: id)
+                    }
                 }
             },
             Task { [weak self] in

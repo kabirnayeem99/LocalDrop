@@ -122,6 +122,14 @@ public actor LocalSendServer {
         await sendSession.snapshot(sessionId: sessionId)
     }
 
+    /// How many wrong-PIN guesses have been counted against `ipAddress`.
+    ///
+    /// Internal, for tests that assert a rejected request did NOT burn one of the sender's three
+    /// attempts. The tracker itself stays an implementation detail of the server.
+    func pinAttempts(for ipAddress: String) async -> Int {
+        await pinTracker.attempts(for: ipAddress)
+    }
+
     /// Locally initiated cancel of the live receive session (the receive-side cancel button), as
     /// opposed to the `/cancel` route, which is a peer telling us to stop.
     ///
@@ -244,6 +252,18 @@ public actor LocalSendServer {
     }
 
     private func handlePrepareUpload(_ request: HTTPRequest, version: LocalSendKit.APIVersion) async throws -> HTTPResponse {
+        // Busy check FIRST, PIN second, body decode third — the reference's order
+        // (`receive_controller.dart:189-207`). Ordering only: this pre-check is separated from
+        // `receiveSession.prepare` by three suspension points, so a session can still be installed
+        // in between. The `.blocked` case out of `prepare` below stays authoritative.
+        //
+        // No `notifyStateObserver()` on this path: nothing was mutated, so there is no state change
+        // to publish. The `.blocked` case below notifies only because it shares the common tail.
+        if await receiveSession.isBusy() {
+            logRouteOutcome(event: "protocol.prepare_upload.rejected", request: request, statusCode: 409, result: "blocked", level: .warning)
+            return .error(statusCode: 409, message: "Blocked by another session")
+        }
+
         switch await pinTracker.validate(
             ipAddress: request.remoteAddress,
             providedPIN: request.query["pin"],

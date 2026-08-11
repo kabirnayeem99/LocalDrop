@@ -26,11 +26,9 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
     private var currentSettings: TransferProtocolSettings
     private var stagedItems: [StagedTransferItem] = []
     private var stateObservationTask: Task<Void, Never>?
-    private var incomingObservationTask: Task<Void, Never>?
-    private var withdrawalObservationTask: Task<Void, Never>?
+    private var inboundEventObservationTask: Task<Void, Never>?
     private let peersBroadcaster = StreamBroadcaster<[NearbyPeerItem]>(initialValue: [])
-    private let incomingBroadcaster = StreamBroadcaster<IncomingTransferRequest>()
-    private let withdrawalBroadcaster = StreamBroadcaster<String>()
+    private let inboundEventBroadcaster = StreamBroadcaster<InboundRequestEvent>()
     private let progressBroadcaster = StreamBroadcaster<TransferProgressEvent>()
     private let logger: AppLogger
     private let runtimeInstanceID = UUID().uuidString.lowercased()
@@ -170,12 +168,10 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
         startupAnnouncementTask?.cancel()
         startupAnnouncementTask = nil
         stateObservationTask?.cancel()
-        incomingObservationTask?.cancel()
-        withdrawalObservationTask?.cancel()
+        inboundEventObservationTask?.cancel()
         logger.emit(level: .debug, event: "app.runtime.stop.requested", scope: "LocalSendRuntimeAdapter", context: runtimeContext(), attributes: [.string("event.action", "stream_teardown")])
         stateObservationTask = nil
-        incomingObservationTask = nil
-        withdrawalObservationTask = nil
+        inboundEventObservationTask = nil
         // Every outbound session, not just "the" one — a runtime stop ends them all.
         activeSendSessions.removeAll()
         await components.node.stop()
@@ -204,12 +200,8 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
         await peersBroadcaster.stream()
     }
 
-    func inboundRequests() async -> AsyncStream<IncomingTransferRequest> {
-        await incomingBroadcaster.stream()
-    }
-
-    func inboundRequestWithdrawals() async -> AsyncStream<String> {
-        await withdrawalBroadcaster.stream()
+    func inboundRequestEvents() async -> AsyncStream<InboundRequestEvent> {
+        await inboundEventBroadcaster.stream()
     }
 
     func progressEvents() async -> AsyncStream<TransferProgressEvent> {
@@ -302,7 +294,11 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
             host: peer.host,
             port: port,
             protocolType: protocolType,
-            fingerprint: peer.fingerprint
+            fingerprint: peer.fingerprint,
+            // Backlog #59: a peer that announced `version == "1.0"` serves only the v1 routes
+            // (`/send-request`, `/send`), so every request in this send has to follow its version
+            // (`common/lib/api_route_builder.dart:28-36`). Posting to the v2 paths 404'd.
+            apiVersion: peer.apiVersion
         )
         logger.emit(
             level: .info,
@@ -787,11 +783,57 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
         }
     }
 
+    /// Test seam: installs an outbound send session without running a real `/prepare-upload`.
+    ///
+    /// The send path builds its client from `node.makeClient`, which returns a concrete client over
+    /// `URLSessionTransport` — there is no transport injection point, and adding a general one is a
+    /// larger refactor than backlog #59 warrants. This exists so the cancel contract (local teardown
+    /// completes and the session entry drains even when the remote POST fails) is assertable without
+    /// two live nodes and a multicast round trip. Nothing in production calls it.
+    func installSendSessionForTesting(
+        id: String,
+        peer: NearbyPeerItem,
+        client: LocalSendClient,
+        fileIDs: [String]
+    ) {
+        var session = ActiveSendSession(id: id, peer: peer, client: client, traceID: "test-trace")
+        session.acceptedItems = fileIDs.map { fileID in
+            SendBatchItem(
+                item: StagedTransferItem(
+                    id: fileID,
+                    fileURL: URL(fileURLWithPath: "/dev/null"),
+                    name: fileID,
+                    subtitle: "",
+                    fileTypeSymbol: "doc",
+                    byteCount: 1
+                ),
+                byteCount: 1
+            )
+        }
+        session.statusByFileID = Dictionary(uniqueKeysWithValues: fileIDs.map { ($0, .transferring) })
+        activeSendSessions[id] = session
+    }
+
+    /// Test seam companion: `activeSendSessions` is private, and "the entry drained" is the whole
+    /// point of the assertion.
+    func hasSendSessionForTesting(id: String) -> Bool {
+        activeSendSessions[id] != nil
+    }
+
     func cancelActiveTransfer(_ id: ActiveTransferProgress.ID) async throws {
         // Keyed lookup, so cancelling the send to device A cannot touch a concurrent send to
         // device B: only the matching session's `/cancel` is posted and only its entry is removed.
         if var session = activeSendSessions[id] {
-            try await session.client.cancel(sessionId: session.id)
+            // Local teardown and the terminal event run FIRST and unconditionally, mirroring the
+            // receive-side path below. The remote POST used to be the first statement, so any
+            // non-2xx wedged the local session: statuses never flipped to `.canceled`,
+            // `transferCanceled` was never emitted, and the `activeSendSessions` entry leaked —
+            // leaving the user with a cancel button that did nothing.
+            //
+            // v1 routing makes that reachable by design rather than only on a network failure: the
+            // reference receiver 403s a `/v1/cancel` whose session's sender announced a non-`1.0`
+            // version (`receive_controller.dart:646-653`), and our `PrepareUploadRequest.info`
+            // always announces `2.1`. LocalDrop's own server carries the identical check.
 
             // Files still in flight become `.canceled` rather than staying `.transferring`, so the
             // terminal event describes the batch honestly. Completed files keep their status.
@@ -808,12 +850,31 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
             // Removed only AFTER the event is emitted — `emitSendProgress` reads the session.
             activeSendSessions[id] = nil
 
+            let context = sendContext(sessionID: session.id, peer: session.peer, traceID: session.traceID)
             logger.emit(
                 level: .notice,
                 event: "transfer.send.canceled",
                 scope: "LocalSendRuntimeAdapter",
-                context: sendContext(sessionID: session.id, peer: session.peer, traceID: session.traceID)
+                context: context
             )
+
+            // Best-effort: telling the receiver to stop is a courtesy that saves it waiting out its
+            // own timeout. Its failure changes nothing locally and there is no user-actionable
+            // recovery to offer, so it is logged and never thrown.
+            do {
+                try await session.client.cancel(sessionId: session.id)
+            } catch {
+                logger.emit(
+                    level: .warning,
+                    event: "transfer.send.cancel_notification_failed",
+                    scope: "LocalSendRuntimeAdapter",
+                    context: context,
+                    attributes: [
+                        .string("error.message", error.localizedDescription),
+                        .string("error.type", String(describing: type(of: error)))
+                    ]
+                )
+            }
             return
         }
 
@@ -877,7 +938,11 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
         let peer = RemotePeer(
             host: session.senderIP,
             port: port,
-            protocolType: session.senderInfo.protocolType ?? currentSettings.protocolType
+            protocolType: session.senderInfo.protocolType ?? currentSettings.protocolType,
+            // The sender announced its version in the prepare-upload body, so cancelling an inbound
+            // transfer from a v1 sender must hit `/api/localsend/v1/cancel` — a v1-only peer serves
+            // no `/v2/cancel` at all.
+            apiVersion: LocalSendKit.APIVersion(protocolVersion: session.senderInfo.version)
         )
         let fingerprint = session.senderInfo.fingerprint
         let notifier = receiveCancelNotifier
@@ -920,8 +985,7 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
 
     private func bindNodeObservers() {
         stateObservationTask?.cancel()
-        incomingObservationTask?.cancel()
-        withdrawalObservationTask?.cancel()
+        inboundEventObservationTask?.cancel()
 
         stateObservationTask = Task {
             logger.emit(level: .debug, event: "discovery.peer.snapshot", scope: "LocalSendRuntimeAdapter", context: runtimeContext(), attributes: [.string("event.action", "stream_started")])
@@ -946,65 +1010,67 @@ actor LocalSendRuntimeAdapter: TransferRuntime {
             logger.emit(level: .debug, event: "discovery.peer.snapshot", scope: "LocalSendRuntimeAdapter", context: runtimeContext(), attributes: [.string("event.action", "stream_finished")])
         }
 
-        incomingObservationTask = Task {
+        // ONE observation for both inbound facts. Prompts and their network-side withdrawals arrive
+        // on a single ordered kit stream and are re-broadcast on a single feature stream, so the
+        // store cannot observe a withdrawal before the request it withdraws. (Nothing else clears
+        // `TransferFeatureStore.incomingRequest` without a user action, which is why the sheet used
+        // to stick after a sender-initiated cancel.)
+        inboundEventObservationTask = Task {
             logger.emit(level: .debug, event: "transfer.incoming.request_bridge_finished", scope: "LocalSendRuntimeAdapter", context: runtimeContext(), attributes: [.string("event.action", "stream_started")])
-            let requestStream = await components.node.incomingTransferRequests()
-            for await request in requestStream {
-                let mappedFiles = request.files.values.sorted { $0.fileName < $1.fileName }.map { file in
-                    IncomingTransferFile(file: file, symbol: Self.symbol(for: file))
+            let eventStream = await components.node.incomingTransferRequestEvents()
+            for await event in eventStream {
+                switch event {
+                case .request(let request):
+                    let mappedFiles = request.files.values.sorted { $0.fileName < $1.fileName }.map { file in
+                        IncomingTransferFile(file: file, symbol: Self.symbol(for: file))
+                    }
+                    let totalBytes = request.files.values.reduce(Int64.zero) { $0 + $1.size }
+                    let fileCountLabel = FeatureTransferLocalization.format("incomingRequest.itemCount", mappedFiles.count)
+                    let totalSizeLabel = ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file)
+                    let subtitle = FeatureTransferLocalization.format("incomingRequest.subtitleFormat", request.info.alias, fileCountLabel, totalSizeLabel)
+                    // `cache: false` (as with withdrawals below): a cached request would be replayed to any
+                    // later subscriber, which now means silently re-accepting and re-downloading a request
+                    // that has already been resolved.
+                    await inboundEventBroadcaster.yield(
+                        .request(
+                            IncomingTransferRequest(
+                                id: request.id,
+                                deviceName: request.info.alias,
+                                subtitle: subtitle,
+                                sourceKind: DeviceKind(deviceType: request.info.deviceType),
+                                files: mappedFiles,
+                                senderFingerprint: request.info.fingerprint
+                            )
+                        ),
+                        cache: false
+                    )
+                    logger.emit(
+                        level: .info,
+                        event: "transfer.incoming.request_received",
+                        scope: "LocalSendRuntimeAdapter",
+                        context: AppLogContext(
+                            attributes: runtimeContext().attributes + [.string("transfer.request_id", request.id)]
+                        ),
+                        attributes: [
+                            .string("peer.alias", request.info.alias),
+                            .int("transfer.file_count", request.files.count),
+                            .int64("transfer.byte_count", totalBytes)
+                        ]
+                    )
+                case .withdrawal(let requestID):
+                    await inboundEventBroadcaster.yield(.withdrawal(requestID: requestID), cache: false)
+                    logger.emit(
+                        level: .notice,
+                        event: "transfer.incoming.request_withdrawn",
+                        scope: "LocalSendRuntimeAdapter",
+                        context: AppLogContext(
+                            attributes: runtimeContext().attributes + [.string("transfer.request_id", requestID)]
+                        ),
+                        attributes: [.string("event.action", "sender_canceled")]
+                    )
                 }
-                let totalBytes = request.files.values.reduce(Int64.zero) { $0 + $1.size }
-                let fileCountLabel = FeatureTransferLocalization.format("incomingRequest.itemCount", mappedFiles.count)
-                let totalSizeLabel = ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file)
-                let subtitle = FeatureTransferLocalization.format("incomingRequest.subtitleFormat", request.info.alias, fileCountLabel, totalSizeLabel)
-                // `cache: false` (as with withdrawals below): a cached request would be replayed to any
-                // later subscriber, which now means silently re-accepting and re-downloading a request
-                // that has already been resolved.
-                await incomingBroadcaster.yield(
-                    IncomingTransferRequest(
-                        id: request.id,
-                        deviceName: request.info.alias,
-                        subtitle: subtitle,
-                        sourceKind: DeviceKind(deviceType: request.info.deviceType),
-                        files: mappedFiles,
-                        senderFingerprint: request.info.fingerprint
-                    ),
-                    cache: false
-                )
-                logger.emit(
-                    level: .info,
-                    event: "transfer.incoming.request_received",
-                    scope: "LocalSendRuntimeAdapter",
-                    context: AppLogContext(
-                        attributes: runtimeContext().attributes + [.string("transfer.request_id", request.id)]
-                    ),
-                    attributes: [
-                        .string("peer.alias", request.info.alias),
-                        .int("transfer.file_count", request.files.count),
-                        .int64("transfer.byte_count", totalBytes)
-                    ]
-                )
             }
             logger.emit(level: .debug, event: "transfer.incoming.request_bridge_finished", scope: "LocalSendRuntimeAdapter", context: runtimeContext(), attributes: [.string("event.action", "stream_finished")])
-        }
-
-        // Third, additive observation: prompts withdrawn by the network side. Nothing else clears
-        // `TransferFeatureStore.incomingRequest` without a user action, which is why the sheet used
-        // to stick after a sender-initiated cancel.
-        withdrawalObservationTask = Task {
-            let withdrawalStream = await components.node.incomingTransferRequestWithdrawals()
-            for await requestID in withdrawalStream {
-                await withdrawalBroadcaster.yield(requestID, cache: false)
-                logger.emit(
-                    level: .notice,
-                    event: "transfer.incoming.request_withdrawn",
-                    scope: "LocalSendRuntimeAdapter",
-                    context: AppLogContext(
-                        attributes: runtimeContext().attributes + [.string("transfer.request_id", requestID)]
-                    ),
-                    attributes: [.string("event.action", "sender_canceled")]
-                )
-            }
         }
     }
 

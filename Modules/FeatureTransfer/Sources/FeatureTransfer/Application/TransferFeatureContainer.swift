@@ -477,7 +477,7 @@ public final class TransferFeatureContainer {
         #endif
         let resource: [AppLogAttribute] = [
             .string("service.name", "LocalDrop"),
-            .string("service.namespace", "com.localdrop"),
+            .string("service.namespace", "io.github.kabirnayeem99"),
             .string("service.version", version),
             .string("deployment.environment", environment),
             .string("host.name", hostName),
@@ -491,7 +491,7 @@ public final class TransferFeatureContainer {
             configuration: AppLoggerConfiguration(minimumLevel: minimumLevel, redactSensitiveValues: true),
             resource: resource,
             sinks: [
-                OSLogSink(subsystem: "com.localdrop.LocalDrop", category: "telemetry"),
+                OSLogSink(subsystem: "io.github.kabirnayeem99.LocalDrop", category: "telemetry"),
                 JSONLFileSink(fileURL: logsDirectory.appendingPathComponent("localdrop.jsonl"))
             ]
         )
@@ -595,8 +595,7 @@ actor NoopTransferRuntime: TransferRuntime {
     func stop() async {}
     func refreshDiscovery() async {}
     func discoveredPeers() async -> AsyncStream<[NearbyPeerItem]> { AsyncStream { $0.yield([]) } }
-    func inboundRequests() async -> AsyncStream<IncomingTransferRequest> { AsyncStream { _ in } }
-    func inboundRequestWithdrawals() async -> AsyncStream<String> { AsyncStream { _ in } }
+    func inboundRequestEvents() async -> AsyncStream<InboundRequestEvent> { AsyncStream { _ in } }
     func progressEvents() async -> AsyncStream<TransferProgressEvent> { AsyncStream { _ in } }
     func updateSettings(_ settings: TransferProtocolSettings) async throws {}
     func stage(_ items: [StagedTransferItem]) async {}

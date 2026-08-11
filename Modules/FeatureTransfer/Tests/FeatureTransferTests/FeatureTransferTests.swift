@@ -641,6 +641,29 @@ final class FeatureTransferTests: XCTestCase {
         XCTAssertFalse(json.contains("\"useHTTPS\""))
     }
 
+    /// `encode(to:)` is a pure dump of stored state. It used to mint a fresh PIN whenever the
+    /// stored one failed normalization, which made encoding side-effecting and non-idempotent.
+    func testProtocolSettingsEncodeEmitsTheStoredIncomingPINVerbatim() throws {
+        var settings = TransferProtocolSettings(
+            deviceName: "LocalDrop Test Mac",
+            tcpPort: 53_317,
+            requirePIN: false,
+            incomingPIN: "123456",
+            allowDownloads: true,
+            useHTTPS: false,
+            saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
+        )
+        // Plain stored `var`, so an invalid value can land here from anywhere.
+        settings.incomingPIN = "bad"
+
+        let first = try JSONEncoder().encode(settings)
+        let second = try JSONEncoder().encode(settings)
+
+        XCTAssertEqual(first, second, "Encoding must not generate a new PIN as a side effect")
+        let json = try XCTUnwrap(String(data: first, encoding: .utf8))
+        XCTAssertTrue(json.contains("\"incomingPIN\":\"bad\""), "The stored value must pass through unchanged")
+    }
+
     func testDefaultSnapshotGeneratesValidIncomingPIN() {
         let snapshot = TransferSettingsSnapshot.default(
             deviceName: "LocalDrop Test Mac",
@@ -753,6 +776,36 @@ final class FeatureTransferTests: XCTestCase {
             TransferProtocolSettings.normalizedIncomingPIN(from: store.incomingPIN),
             store.incomingPIN
         )
+    }
+
+    /// `TransferProtocolSettings.incomingPIN` is a plain `var` with no `didSet`, so neither the
+    /// initializer nor the decode normalizer is what keeps an empty PIN out of the server's
+    /// `expectedPIN` — anything can assign `""` after the fact, and `testing(incomingPIN:)` does
+    /// exactly that. The guard that actually holds is `resolvedIncomingPIN` on the way into
+    /// `currentProtocolSettings`; this pins it.
+    func testCurrentProtocolSettingsSubstitutesAPINForAnEmptyValueSetAfterInit() {
+        let runtime = FakeTransferRuntime()
+        let store = TransferFeatureStore(
+            runtime: runtime,
+            settingsPersistence: InMemorySettingsPersistence(),
+            historyPersistence: InMemoryHistoryPersistence(),
+            loginItemManaging: FakeLoginItemManaging(),
+            snapshot: .default(
+                deviceName: "LocalDrop Test Mac",
+                saveLocation: URL(fileURLWithPath: "/tmp/LocalDropTests")
+            )
+        )
+
+        store.requirePIN = true
+        store.incomingPIN = ""
+
+        // No `ensureIncomingPIN()` / `persistSettings()` repair in between — the read itself must
+        // be safe, because this is the value `TransferFeatureContainer` hands to
+        // `LocalSendRuntimeConfiguration.pin`.
+        let resolved = store.currentProtocolSettings.incomingPIN
+        XCTAssertFalse(resolved.isEmpty)
+        XCTAssertEqual(resolved.count, TransferProtocolSettings.incomingPINLength)
+        XCTAssertEqual(TransferProtocolSettings.normalizedIncomingPIN(from: resolved), resolved)
     }
 
     func testPersistSettingsRepairsMissingPINWhenRequirementEnabled() {
@@ -1995,7 +2048,6 @@ final class FeatureTransferTests: XCTestCase {
 
     func testUserCancelOfAnInboundTransferTearsDownTheSessionEmitsCanceledAndNotifiesTheSenderOnce() async throws {
         let fixture = try await makeLiveReceiveFixture()
-        defer { fixture.tearDown() }
 
         try await fixture.adapter.cancelActiveTransfer(fixture.sessionID)
 
@@ -2015,11 +2067,12 @@ final class FeatureTransferTests: XCTestCase {
         XCTAssertEqual(sent.first?.peer.port, Self.receiveCancelTestSenderPort)
         XCTAssertEqual(sent.first?.peer.protocolType, .http)
         XCTAssertEqual(sent.first?.fingerprint, Self.receiveCancelTestSenderFingerprint)
+
+        await fixture.tearDown()
     }
 
     func testPeerInitiatedCancelSendsNoOutboundCancelBack() async throws {
         let fixture = try await makeLiveReceiveFixture()
-        defer { fixture.tearDown() }
 
         // The peer cancels US. This lands as an observed `.canceled` transition — the same
         // observation the UI is driven from — and must NOT bounce a /cancel back at the peer.
@@ -2029,11 +2082,12 @@ final class FeatureTransferTests: XCTestCase {
         XCTAssertNotNil(canceledEvent, "A peer-initiated cancel still has to reach the UI")
         let sent = await fixture.notifications.sent()
         XCTAssertEqual(sent, [], "A peer-initiated cancel must never trigger an outbound /cancel")
+
+        await fixture.tearDown()
     }
 
     func testFailingCancelNotificationStillCancelsLocallyAndUpdatesTheUI() async throws {
         let fixture = try await makeLiveReceiveFixture(notifierError: URLError(.timedOut))
-        defer { fixture.tearDown() }
 
         try await fixture.adapter.cancelActiveTransfer(fixture.sessionID)
 
@@ -2043,11 +2097,12 @@ final class FeatureTransferTests: XCTestCase {
         XCTAssertNotNil(canceledEvent)
         let sent = await fixture.notifications.sent()
         XCTAssertEqual(sent.count, 1, "The POST is attempted once and its failure swallowed")
+
+        await fixture.tearDown()
     }
 
     func testCancelingTheSameInboundTransferTwiceSendsOnlyOneOutboundCancel() async throws {
         let fixture = try await makeLiveReceiveFixture()
-        defer { fixture.tearDown() }
 
         // Concurrently first: `cancelActiveTransfer` suspends between reading the snapshot and
         // tearing the session down, so the actor is reentrant across exactly the window the
@@ -2060,6 +2115,8 @@ final class FeatureTransferTests: XCTestCase {
 
         let sent = await fixture.notifications.sent()
         XCTAssertEqual(sent.count, 1)
+
+        await fixture.tearDown()
     }
 
     func testSendDirectionCancelIsUnaffectedByTheReceiveCancelPath() async throws {
@@ -2081,6 +2138,81 @@ final class FeatureTransferTests: XCTestCase {
         XCTAssertEqual(sent, [])
     }
 
+    // MARK: - Client-side v1 route targeting (backlog #59)
+
+    /// A peer that omits `version` on the wire is a v1-era peer
+    /// (`common/lib/constants.dart:18`, `register_dto.dart:38`) — it must NOT inherit our own
+    /// `protocolVersion`, or the legacy peers this change exists to reach get mislabeled as v2 and
+    /// keep receiving v2 paths they do not serve.
+    func testNearbyPeerItemResolvesAMissingAnnouncedVersionToTheV1Fallback() throws {
+        // Decoded from the wire rather than built in memory, because the absent-`version` rule
+        // lives in `RegisterInfo`'s decoder and this test is about it surviving the trip.
+        let peer = try Self.makeDiscoveredPeerItem(
+            json: #"{"alias":"Legacy","fingerprint":"OLD","port":53317,"protocol":"http"}"#
+        )
+
+        XCTAssertEqual(peer.protocolVersion, LocalSendKit.fallbackProtocolVersion)
+        XCTAssertEqual(peer.apiVersion, .v1)
+    }
+
+    func testNearbyPeerItemResolvesAnAnnouncedV2VersionToV2() throws {
+        let peer = try Self.makeDiscoveredPeerItem(
+            json: #"{"alias":"Modern","version":"2.1","fingerprint":"NEW","port":53317,"protocol":"https"}"#
+        )
+
+        XCTAssertEqual(peer.protocolVersion, "2.1")
+        XCTAssertEqual(peer.apiVersion, .v2)
+    }
+
+    private static func makeDiscoveredPeerItem(json: String) throws -> NearbyPeerItem {
+        let info = try JSONDecoder().decode(RegisterInfo.self, from: Data(json.utf8))
+        return NearbyPeerItem(
+            peer: DiscoveredPeer(host: "192.168.1.44", info: info, shouldReplyViaRegister: false)
+        )
+    }
+
+    /// The memberwise initializer's new parameter has to be defaulted — every existing call site
+    /// omits it — and the default is the v1 fallback, not our own version.
+    func testNearbyPeerItemMemberwiseInitDefaultsToTheV1Fallback() {
+        XCTAssertEqual(Self.makePINTestPeer().protocolVersion, LocalSendKit.fallbackProtocolVersion)
+    }
+
+    /// The remote `/cancel` is a courtesy, not a precondition. It used to be the FIRST statement of
+    /// the send branch, so a non-2xx threw before any local teardown: statuses stayed
+    /// `.transferring`, no `.transferCanceled` was emitted, and the session entry leaked — the
+    /// cancel button did nothing.
+    ///
+    /// v1 routing makes that reachable by design: the reference 403s a `/v1/cancel` whose session's
+    /// sender announced a non-`1.0` version (`receive_controller.dart:646-653`), and our
+    /// prepare-upload always announces `2.1`.
+    func testSendCancelCompletesLocalTeardownWhenTheRemoteCancelFails() async throws {
+        let recorder = RuntimeComponentRecorder()
+        var settings = makePINTestSettings()
+        settings.useHTTPS = false
+        let adapter = try makeLiveRuntimeAdapter(settings: settings, recorder: recorder)
+        let events = await ProgressEventCollector.attached(to: adapter)
+        defer { Task { await adapter.stop() } }
+
+        let sessionID = "send-session-v1"
+        await adapter.installSendSessionForTesting(
+            id: sessionID,
+            peer: Self.makePINTestPeer(),
+            // Every request this client makes fails, standing in for the 403 a v1-routed cancel
+            // draws from a receiver whose session recorded a v2 sender.
+            client: LocalSendClient(transport: AlwaysFailingTransport()),
+            fileIDs: ["file-1"]
+        )
+
+        try await adapter.cancelActiveTransfer(sessionID)
+
+        let canceledEvent = await waitForCanceledEvent(events, transferID: sessionID)
+        XCTAssertNotNil(canceledEvent, "A failed remote /cancel must not swallow the terminal event")
+        XCTAssertEqual(canceledEvent?.direction, .sending)
+        XCTAssertEqual(canceledEvent?.files.first?.state, .canceled)
+        let leaked = await adapter.hasSendSessionForTesting(id: sessionID)
+        XCTAssertFalse(leaked, "The session entry must drain even when the remote /cancel fails")
+    }
+
     private static let receiveCancelTestSenderPort = 53318
     private static let receiveCancelTestSenderFingerprint = "receive-cancel-test-sender-fingerprint"
 
@@ -2096,9 +2228,12 @@ final class FeatureTransferTests: XCTestCase {
         let notifications: ReceiveCancelNotificationRecorder
         let acceptTask: Task<Void, Never>
 
-        func tearDown() {
+        /// Deterministic: the next fixture must not start while this one's runtime is still
+        /// shutting down, so both the accept loop and the adapter stop are awaited.
+        func tearDown() async {
             acceptTask.cancel()
-            Task { await adapter.stop() }
+            _ = await acceptTask.value
+            await adapter.stop()
         }
     }
 
@@ -2127,8 +2262,11 @@ final class FeatureTransferTests: XCTestCase {
         let endpoint = try await waitForRunningEndpoint(node: node, file: file, line: line)
 
         let acceptTask = Task {
-            let requests = await adapter.inboundRequests()
-            for await request in requests {
+            let events = await adapter.inboundRequestEvents()
+            for await event in events {
+                // Only `.request`. Accepting on `.withdrawal` would call `.acceptAll` with the ID of
+                // a request the sender already canceled, silently corrupting these fixtures.
+                guard case .request(let request) = event else { continue }
                 try? await adapter.respondToIncomingRequest(.acceptAll(requestID: request.id))
             }
         }
@@ -3566,10 +3704,98 @@ final class FeatureTransferTests: XCTestCase {
         XCTAssertEqual(decoded.schemaVersion, TransferSettingsSnapshot.currentSchemaVersion)
     }
 
-    func testWithdrawalArrivingBeforeTheRequestSuppressesIt() async {
+    /// The positive-intermediate version of the old "withdrawal arrives first" test, which asserted
+    /// a sequence the merged stream makes unrepresentable. Both halves are load-bearing: the middle
+    /// `waitUntil` proves the request really was delivered, so the final "prompt is gone" assertion
+    /// cannot pass vacuously by the request never having arrived.
+    func testInboundRequestThenWithdrawalDismissesThePromptInOrder() async {
+        let runtime = FakeTransferRuntime()
+        let store = TransferFeatureStore(
+            runtime: runtime,
+            settingsPersistence: InMemorySettingsPersistence(),
+            historyPersistence: InMemoryHistoryPersistence(entries: []),
+            loginItemManaging: FakeLoginItemManaging(),
+            snapshot: Self.promptingSnapshot()
+        )
+        await store.start()
+        // Attach barrier, not an ordering hack: `start()` only creates the observation tasks, each
+        // of which subscribes asynchronously inside its own body.
+        for _ in 0..<20 { await Task.yield() }
+
+        await runtime.emitIncomingRequest(Self.makeIncomingRequest(id: "racy", senderFingerprint: "deadbeef"))
+        await waitUntil { store.incomingRequest?.id == "racy" }
+
+        await runtime.emitWithdrawal("racy")
+        await waitUntil { store.incomingRequest == nil }
+
+        XCTAssertNil(store.activeSheet)
+        let responses = await runtime.responses
+        XCTAssertTrue(responses.isEmpty)
+    }
+
+    /// Asserts the ordering directly rather than inferring it from end state. This is the test that
+    /// fails if anyone reintroduces a second consumer for withdrawals.
+    ///
+    /// Recording via the store's own structured logs (rather than at the runtime's stream hand-out
+    /// point) is deliberate: `handleIncomingRequest`/`withdrawIncomingRequest` only emit
+    /// `prompt_displayed`/`withdrawn` when they actually act on an event, so this proves what the
+    /// store *processed*, in the order it processed it — not merely what order the runtime handed
+    /// events to whichever task(s) happen to be consuming the stream.
+    func testInboundRequestEventsAreObservedInEmissionOrder() async {
+        let sink = RecordingLogSink()
+        let logger = AppLogger(
+            configuration: AppLoggerConfiguration(minimumLevel: .info, redactSensitiveValues: true),
+            resource: [.string("service.name", "LocalDrop")],
+            sinks: [sink]
+        )
+        let runtime = FakeTransferRuntime()
+        let store = TransferFeatureStore(
+            runtime: runtime,
+            settingsPersistence: InMemorySettingsPersistence(),
+            historyPersistence: InMemoryHistoryPersistence(entries: []),
+            loginItemManaging: FakeLoginItemManaging(),
+            snapshot: Self.promptingSnapshot(),
+            logger: logger
+        )
+        await store.start()
+        for _ in 0..<20 { await Task.yield() }
+
+        let first = Self.makeIncomingRequest(id: "x", senderFingerprint: "deadbeef")
+        let second = Self.makeIncomingRequest(id: "y", senderFingerprint: "deadbeef")
+        // Emitted back to back with no yields in between: one ordered stream must still hand them
+        // to the single consumer in exactly this order.
+        await runtime.emitIncomingRequest(first)
+        await runtime.emitWithdrawal("x")
+        await runtime.emitIncomingRequest(second)
+
+        await waitUntil { store.incomingRequest?.id == "y" }
+        await waitUntil {
+            let names = await sink.records().compactMap { $0.attributes["event.name"] }
+            return names.count >= 3
+        }
+
+        let observed = await sink.records().compactMap { record -> (String, String)? in
+            guard case .string(let name) = record.attributes["event.name"],
+                  case .string(let requestID)? = record.attributes["transfer.request_id"]
+            else { return nil }
+            return (name, requestID)
+        }
+
+        XCTAssertEqual(
+            observed.map(\.0),
+            ["transfer.incoming.prompt_displayed", "transfer.incoming.withdrawn", "transfer.incoming.prompt_displayed"]
+        )
+        XCTAssertEqual(observed.map(\.1), ["x", "x", "y"])
+    }
+
+    /// Quick save auto-accepts without ever displaying a prompt, so a withdrawal that follows finds
+    /// nothing displayed and is ignored: no prompt, no `.declined` history entry. The auto-accept's
+    /// own response still goes out and is answered by the fake — the live bridge would reject it
+    /// with `incomingTransferRequestNotPending`, logged as `transfer.incoming.auto_accept_failed`.
+    /// Pre-existing behaviour, unchanged by the merge, but this is now its only coverage.
+    func testWithdrawalAfterAutoAcceptIsIgnored() async {
         let runtime = FakeTransferRuntime()
         var snapshot = Self.promptingSnapshot()
-        // Worst case: quick save would otherwise auto-accept the dead request without any prompt.
         snapshot.quickSave = .on
         let store = TransferFeatureStore(
             runtime: runtime,
@@ -3579,18 +3805,23 @@ final class FeatureTransferTests: XCTestCase {
             snapshot: snapshot
         )
         await store.start()
-
-        await runtime.emitWithdrawal("racy")
-        // Let the withdrawal task drain before the request task sees the request.
         for _ in 0..<20 { await Task.yield() }
 
         await runtime.emitIncomingRequest(Self.makeIncomingRequest(id: "racy", senderFingerprint: "deadbeef"))
+        await waitUntil { await runtime.responses.isEmpty == false }
+        XCTAssertNil(store.incomingRequest, "quick save must auto-accept without displaying a prompt")
+
+        await runtime.emitWithdrawal("racy")
         for _ in 0..<20 { await Task.yield() }
 
         XCTAssertNil(store.incomingRequest)
         XCTAssertNil(store.activeSheet)
+        XCTAssertTrue(
+            store.historyEntries.contains { $0.outcome == .declined } == false,
+            "A withdrawal must never be recorded as a decline"
+        )
         let responses = await runtime.responses
-        XCTAssertTrue(responses.isEmpty)
+        XCTAssertEqual(responses, [.acceptAll(requestID: "racy")])
     }
 
     func testWithdrawalDoesNotSuppressALaterDistinctRequest() async {
@@ -3603,11 +3834,14 @@ final class FeatureTransferTests: XCTestCase {
             snapshot: Self.promptingSnapshot()
         )
         await store.start()
-
-        await runtime.emitWithdrawal("gone")
+        // Attach barrier BEFORE the withdrawal. Without it the `cache: false` withdrawal would be
+        // yielded to zero subscribers and never delivered at all, and the test would stop proving
+        // that a stale withdrawal is inert.
         for _ in 0..<20 { await Task.yield() }
 
+        await runtime.emitWithdrawal("gone")
         await runtime.emitIncomingRequest(Self.makeIncomingRequest(id: "fresh", senderFingerprint: "deadbeef"))
+
         await waitUntil { store.incomingRequest?.id == "fresh" }
         XCTAssertEqual(store.activeSheet, .incoming)
     }
@@ -4484,6 +4718,68 @@ final class FeatureTransferTests: XCTestCase {
         XCTAssertFalse(entries[0].isMessage, "a missing isMessage must default to false, not fail the decode")
     }
 
+    // MARK: - Backlog item 50: favorite rename reaches `aliasOverride`
+
+    /// `aliasOverride` had a model, persistence and a render path but no setter — nothing in the
+    /// app could ever populate it.
+    func testRenamingAFavoriteSetsAliasOverrideAndPersists() async {
+        let runtime = FakeTransferRuntime()
+        let favorites = InMemoryFavoritesPersistence()
+        let store = TransferFeatureStore(
+            runtime: runtime,
+            settingsPersistence: InMemorySettingsPersistence(),
+            historyPersistence: InMemoryHistoryPersistence(),
+            favoritesPersistence: favorites,
+            loginItemManaging: FakeLoginItemManaging(),
+            snapshot: Self.promptingSnapshot()
+        )
+
+        store.toggleFavorite(fingerprint: "ABCDEF0123", lastKnownAlias: "Broadcast Name")
+        XCTAssertTrue(store.renameFavorite(fingerprint: "ABCDEF0123", alias: "Kitchen Mac"))
+
+        XCTAssertEqual(store.aliasOverride(forFingerprint: "ABCDEF0123"), "Kitchen Mac")
+        XCTAssertEqual(store.sortedFavorites.first?.displayName, "Kitchen Mac")
+        XCTAssertEqual(favorites.load().first?.aliasOverride, "Kitchen Mac", "the rename must be persisted")
+    }
+
+    /// Clearing the override is the only route back to the broadcast name, so empty/whitespace
+    /// input must clear rather than be rejected.
+    func testRenamingAFavoriteToEmptyClearsTheOverride() async {
+        let runtime = FakeTransferRuntime()
+        let store = TransferFeatureStore(
+            runtime: runtime,
+            settingsPersistence: InMemorySettingsPersistence(),
+            historyPersistence: InMemoryHistoryPersistence(),
+            favoritesPersistence: InMemoryFavoritesPersistence(),
+            loginItemManaging: FakeLoginItemManaging(),
+            snapshot: Self.promptingSnapshot()
+        )
+
+        store.toggleFavorite(fingerprint: "ABCDEF0123", lastKnownAlias: "Broadcast Name")
+        store.renameFavorite(fingerprint: "ABCDEF0123", alias: "Kitchen Mac")
+        XCTAssertEqual(store.aliasOverride(forFingerprint: "ABCDEF0123"), "Kitchen Mac")
+
+        store.renameFavorite(fingerprint: "ABCDEF0123", alias: "   ")
+        XCTAssertNil(store.aliasOverride(forFingerprint: "ABCDEF0123"))
+        XCTAssertEqual(store.sortedFavorites.first?.displayName, "Broadcast Name", "clearing falls back to the broadcast name")
+    }
+
+    /// Renaming something that is not a favorite must not silently create one.
+    func testRenamingAnUnknownFingerprintDoesNothing() async {
+        let runtime = FakeTransferRuntime()
+        let store = TransferFeatureStore(
+            runtime: runtime,
+            settingsPersistence: InMemorySettingsPersistence(),
+            historyPersistence: InMemoryHistoryPersistence(),
+            favoritesPersistence: InMemoryFavoritesPersistence(),
+            loginItemManaging: FakeLoginItemManaging(),
+            snapshot: Self.promptingSnapshot()
+        )
+
+        XCTAssertFalse(store.renameFavorite(fingerprint: "NOTAFAVORITE", alias: "Nope"))
+        XCTAssertTrue(store.sortedFavorites.isEmpty)
+    }
+
     private func requiredLocalizationIdentifiers() throws -> [String] {
         let bundleLocalizations = try XCTUnwrap((try loadInfoPlist())["CFBundleLocalizations"] as? [String])
         var locales: [String] = []
@@ -4581,6 +4877,19 @@ private actor PINPromptRecorder {
     }
 }
 
+/// Fails every request, standing in for a peer that refuses (or cannot answer) the send-side
+/// `/cancel` — e.g. the 403 a v1-routed cancel draws from a receiver whose session recorded a v2
+/// sender (`receive_controller.dart:646-653`).
+private struct AlwaysFailingTransport: LocalSendTransport {
+    func send(
+        _ request: HTTPRequest,
+        to peer: RemotePeer,
+        progress: (@Sendable (FileTransferProgress) -> Void)?
+    ) async throws -> HTTPResponse {
+        throw LocalSendClientError.invalidStatusCode(403)
+    }
+}
+
 /// Stands in for the outbound `POST /cancel` the receiver fires at the sender, so a test can count
 /// them — including the load-bearing case of zero, when the peer is the one who cancelled.
 private actor ReceiveCancelNotificationRecorder {
@@ -4647,8 +4956,7 @@ private actor ProgressEventCollector {
 
 private actor FakeTransferRuntime: TransferRuntime {
     private let peersBroadcaster = TestBroadcaster<[NearbyPeerItem]>(initialValue: [])
-    private let incomingBroadcaster = TestBroadcaster<FeatureTransfer.IncomingTransferRequest>()
-    private let withdrawalBroadcaster = TestBroadcaster<String>()
+    private let inboundEventBroadcaster = TestBroadcaster<InboundRequestEvent>()
     private let progressBroadcaster = TestBroadcaster<TransferProgressEvent>()
     private(set) var lastUpdatedSettings: TransferProtocolSettings?
     private(set) var refreshDiscoveryCallCount = 0
@@ -4662,9 +4970,13 @@ private actor FakeTransferRuntime: TransferRuntime {
     func stop() async {}
     func refreshDiscovery() async { refreshDiscoveryCallCount += 1 }
     func discoveredPeers() async -> AsyncStream<[NearbyPeerItem]> { await peersBroadcaster.stream() }
-    func inboundRequests() async -> AsyncStream<FeatureTransfer.IncomingTransferRequest> { await incomingBroadcaster.stream() }
-    func inboundRequestWithdrawals() async -> AsyncStream<String> { await withdrawalBroadcaster.stream() }
-    func emitWithdrawal(_ requestID: String) async { await withdrawalBroadcaster.yield(requestID) }
+    func inboundRequestEvents() async -> AsyncStream<InboundRequestEvent> { await inboundEventBroadcaster.stream() }
+    /// `cache: false`, exactly as production yields withdrawals. A cached withdrawal would become
+    /// the replayed last value for a late or re-subscribing store, which is a hazard the single
+    /// merged stream would otherwise introduce.
+    func emitWithdrawal(_ requestID: String) async {
+        await inboundEventBroadcaster.yield(.withdrawal(requestID: requestID), cache: false)
+    }
     func progressEvents() async -> AsyncStream<TransferProgressEvent> { await progressBroadcaster.stream() }
     func updateSettings(_ settings: TransferProtocolSettings) async throws {
         if let updateSettingsError {
@@ -4709,8 +5021,11 @@ private actor FakeTransferRuntime: TransferRuntime {
         updateSettingsError = error
     }
 
+    /// Keeps `cache: true` (production uses `cache: false`) because several tests deliberately emit
+    /// before `start()` and rely on the replay — `testActiveSheetPrefersIncomingRequestOverProgress`
+    /// and `testRestartAfterStopRebindsRuntimeStreams`. Pre-existing test-fixture convenience.
     func emitIncomingRequest(_ request: FeatureTransfer.IncomingTransferRequest) async {
-        await incomingBroadcaster.yield(request)
+        await inboundEventBroadcaster.yield(.request(request))
     }
 
     func emitProgress(_ progress: ActiveTransferProgress) async {
@@ -4876,8 +5191,13 @@ private actor TestBroadcaster<Value: Sendable> {
         }
     }
 
-    func yield(_ value: Value) {
-        currentValue = value
+    /// `cache` mirrors the production `StreamBroadcaster` signature. It defaults to `true` — which
+    /// production does NOT do — because a number of existing tests deliberately emit before
+    /// `start()` and rely on the replay; see the note on `FakeTransferRuntime.emitIncomingRequest`.
+    func yield(_ value: Value, cache: Bool = true) {
+        if cache {
+            currentValue = value
+        }
         for continuation in continuations.values {
             continuation.yield(value)
         }

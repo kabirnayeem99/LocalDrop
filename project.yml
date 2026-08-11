@@ -1,6 +1,6 @@
 name: LocalDrop
 options:
-  bundleIdPrefix: com.localdrop
+  bundleIdPrefix: io.github.kabirnayeem99
   deploymentTarget:
     macOS: "14.0"
 packages:
@@ -20,11 +20,13 @@ targets:
       - path: App/LocalDropApp
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.localdrop.LocalDrop
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.kabirnayeem99.LocalDrop
         INFOPLIST_FILE: App/LocalDropApp/Info.plist
         ENABLE_HARDENED_RUNTIME: true
         MARKETING_VERSION: "1.0"
         CURRENT_PROJECT_VERSION: "1"
+        DEVELOPMENT_TEAM: 8B32JSRHMA
+        CODE_SIGN_ENTITLEMENTS: App/LocalDropApp/LocalDrop.entitlements
     dependencies:
       - package: FeatureTransfer
   LocalDropAppTests:
@@ -45,7 +47,7 @@ targets:
     settings:
       base:
         GENERATE_INFOPLIST_FILE: true
-        PRODUCT_BUNDLE_IDENTIFIER: com.localdrop.LocalDropUITests
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.kabirnayeem99.LocalDropUITests
         TEST_TARGET_NAME: LocalDrop
     dependencies:
       - target: LocalDrop

@@ -75,7 +75,7 @@ private struct KeychainFixture {
             .appendingPathComponent("keychain-store-tests-\(UUID().uuidString)")
         legacyURL = directory.appendingPathComponent("identity.json")
         backend = FakeKeychainBackend()
-        service = "com.localdrop.tests.identity.\(UUID().uuidString)"
+        service = "io.github.kabirnayeem99.tests.identity.\(UUID().uuidString)"
         account = "tls-identity"
     }
 
@@ -245,7 +245,7 @@ struct KeychainCertificateStoreTests {
     @Test func returnsNilWhenNoLegacyURLIsConfigured() throws {
         let backend = FakeKeychainBackend()
         let store = KeychainCertificateStore(
-            service: "com.localdrop.tests.identity.\(UUID().uuidString)",
+            service: "io.github.kabirnayeem99.tests.identity.\(UUID().uuidString)",
             account: "tls-identity",
             legacyIdentityURL: nil,
             backend: backend
@@ -329,7 +329,7 @@ struct KeychainCertificateStoreTests {
     /// where keychain access can be denied outright, so this skips gracefully rather than failing.
     @Test func realKeychainBackendRoundTripsWhenAvailable() throws {
         let backend = SecurityKeychainItemBackend()
-        let service = "com.localdrop.tests.identity.\(UUID().uuidString)"
+        let service = "io.github.kabirnayeem99.tests.identity.\(UUID().uuidString)"
         let account = "tls-identity"
         defer { try? backend.deleteItem(service: service, account: account) }
 

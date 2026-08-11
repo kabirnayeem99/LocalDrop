@@ -50,29 +50,30 @@ struct SecurityKeychainItemBackend: KeychainItemBackend {
 
     // NOTE ON ITEM ATTRIBUTES AND WHAT THEY DO / DO NOT BUY:
     //
-    // This project is not signed with a Developer ID team, so we deliberately DO NOT set
-    // `kSecAttrAccessGroup` and DO NOT set `kSecUseDataProtectionKeychain`. Both require a Team ID
-    // plus `keychain-access-groups` entitlements we do not have. The accepted trade-off is looser
-    // access control: the item lands in the legacy (file-based) macOS keychain.
+    // This project is signed with Developer ID Team `8B32JSRHMA` and ships a
+    // `keychain-access-groups` entitlement, so the item is stored in the data-protection
+    // keychain (`kSecUseDataProtectionKeychain: true`) under a Team-ID-scoped access group
+    // rather than the legacy (file-based) macOS keychain.
     //
-    // Consequence, stated honestly: on the legacy macOS keychain `kSecAttrAccessible*` is IGNORED.
-    // We set `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` purely to future-proof a later move
-    // to the data-protection keychain. It provides NO at-rest accessibility guarantee today. What
-    // this store actually buys over the previous plaintext JSON file is: the private key is no
-    // longer sitting in a world-readable, trivially-copied file in Application Support, and it is
-    // covered by keychain ACLs and login-keychain encryption at rest. It is NOT hardware-bound, NOT
-    // Secure-Enclave-backed, and NOT protected against a determined attacker already running code
-    // as this user.
+    // Consequence: on the data-protection keychain `kSecAttrAccessible*` IS enforced, so
+    // `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` now buys a real at-rest guarantee:
+    // the item is unreadable before first unlock and never leaves this device. It is still NOT
+    // hardware-bound, NOT Secure-Enclave-backed, and NOT protected against a determined attacker
+    // already running code as this user.
     //
     // `kSecAttrSynchronizable` is set to `false` EXPLICITLY rather than left to the default: an
     // iCloud-synced TLS identity would clone one device's LocalSend identity onto another, breaking
     // the one-device-one-identity invariant that peer TOFU pinning depends on.
+    private static let keychainAccessGroup = "8B32JSRHMA.io.github.kabirnayeem99.LocalDrop"
+
     private func baseQuery(service: String, account: String) -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
-            kSecAttrSynchronizable as String: false
+            kSecAttrSynchronizable as String: false,
+            kSecUseDataProtectionKeychain as String: true,
+            kSecAttrAccessGroup as String: Self.keychainAccessGroup
         ]
     }
 
@@ -135,7 +136,7 @@ struct SecurityKeychainItemBackend: KeychainItemBackend {
 /// identity and every peer TOFU-pins it.
 public struct KeychainCertificateStore: CertificateStore {
     /// Default keychain service string for the LocalDrop TLS identity.
-    public static let defaultService = "com.localdrop.LocalDrop.identity"
+    public static let defaultService = "io.github.kabirnayeem99.LocalDrop.identity"
     /// Default keychain account for the LocalDrop TLS identity.
     public static let defaultAccount = "tls-identity"
 

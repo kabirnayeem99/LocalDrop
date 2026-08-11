@@ -4,11 +4,26 @@ public struct RemotePeer: Equatable, Sendable {
     public var host: String
     public var port: Int
     public var protocolType: ProtocolType
+    /// The protocol version this peer announced, as a route-selection decision.
+    ///
+    /// `ApiRoute.target` (`common/lib/api_route_builder.dart:28-36`) derives every client path from
+    /// the target device's version, so it belongs on the peer rather than on each call.
+    ///
+    /// Defaults to `.v2`, which is exactly the behaviour every call site had before this existed: a
+    /// site that forgets to plumb the discovered version keeps talking v2 and can only fail the way
+    /// it already did — never worse for a v2 peer.
+    public var apiVersion: LocalSendKit.APIVersion
 
-    public init(host: String, port: Int, protocolType: ProtocolType) {
+    public init(
+        host: String,
+        port: Int,
+        protocolType: ProtocolType,
+        apiVersion: LocalSendKit.APIVersion = .v2
+    ) {
         self.host = host
         self.port = port
         self.protocolType = protocolType
+        self.apiVersion = apiVersion
     }
 }
 
@@ -169,13 +184,23 @@ public struct LocalSendClient: Sendable {
     /// `apiVersion` mirrors `ApiRoute.register.target(peer)`, which picks the v1 path for a peer
     /// advertising `version == "1.0"`. A v1-pinned peer has no `/api/localsend/v2/register` route,
     /// so replying to its announcement on the v2 path would 404 and silently fall back to UDP.
+    ///
+    /// It stays an explicit parameter — rather than reading `peer.apiVersion` like every other
+    /// route — because the discovery register responder replies to an announcement *before* any
+    /// `RemotePeer` has been given a version. When supplied it is an OVERRIDE and wins; `nil` means
+    /// "use the peer's own version".
     public func register(
         with info: RegisterInfo,
         to peer: RemotePeer? = nil,
-        apiVersion: LocalSendKit.APIVersion = .v2
+        apiVersion: LocalSendKit.APIVersion? = nil
     ) async throws -> RegisterInfo {
         let peer = try resolvePeer(peer)
-        let request = try jsonRequest(.post, path: "\(apiVersion.prefix)/register", body: info, remoteAddress: peer.host)
+        let request = try jsonRequest(
+            .post,
+            path: LocalSendKit.clientPath(version: apiVersion ?? peer.apiVersion, route: "register"),
+            body: info,
+            remoteAddress: peer.host
+        )
         let response = try await transport.send(request, to: peer)
         return try decode(response, as: RegisterInfo.self)
     }
@@ -183,7 +208,11 @@ public struct LocalSendClient: Sendable {
     public func info(from peer: RemotePeer? = nil) async throws -> InfoResponse {
         let peer = try resolvePeer(peer)
         let response = try await transport.send(
-            HTTPRequest(method: .get, path: "\(LocalSendKit.apiPrefix)/info", remoteAddress: peer.host),
+            HTTPRequest(
+                method: .get,
+                path: LocalSendKit.clientPath(version: peer.apiVersion, route: "info"),
+                remoteAddress: peer.host
+            ),
             to: peer
         )
         return try decode(response, as: InfoResponse.self)
@@ -195,9 +224,13 @@ public struct LocalSendClient: Sendable {
         pin: String? = nil
     ) async throws -> PrepareUploadResponse? {
         let peer = try resolvePeer(peer)
+        // The `pin` query item is deliberately NOT version-branched. The reference's `checkPin`
+        // (`app/lib/provider/network/server/controller/common.dart`) reads `pin` off the query for
+        // both versions, so it — and the 401 retry loop above this call — carry to
+        // `/v1/send-request` unchanged. Do not "helpfully" add a v1 branch here.
         let request = try jsonRequest(
             .post,
-            path: "\(LocalSendKit.apiPrefix)/prepare-upload",
+            path: LocalSendKit.clientPath(version: peer.apiVersion, route: "prepare-upload"),
             query: pin.map { ["pin": $0] } ?? [:],
             body: requestBody,
             remoteAddress: peer.host
@@ -205,13 +238,28 @@ public struct LocalSendClient: Sendable {
         let response = try await transport.send(request, to: peer)
         // 204 ("no file transfer needed") is a *successful* outcome distinct from a 403 rejection:
         // the recipient accepted the request but selected nothing. It must stay `nil`, not an error.
+        //
+        // This early return and the status taxonomy below run BEFORE the version branch on purpose:
+        // the reference returns a bodiless 204 for an empty selection under both versions, and
+        // decoding an empty body as `[String: String]` would throw where it must return `nil`.
         if response.statusCode == 204 {
             return nil
         }
         if let error = Self.prepareUploadError(forStatusCode: response.statusCode) {
             throw error
         }
-        return try decode(response, as: PrepareUploadResponse.self)
+        guard peer.apiVersion == .v1 else {
+            return try decode(response, as: PrepareUploadResponse.self)
+        }
+        // v1 answers with the BARE `{fileId: token}` map — no `{sessionId, files}` envelope
+        // (`receive_controller.dart:427-437`, where the envelope is built only `if (v2)`).
+        //
+        // The session id is synthesized locally because the rest of this kit — and every
+        // FeatureTransfer progress/cancel lookup — keys send state by `sessionId`. It is local
+        // bookkeeping ONLY and never goes back on the wire (see `upload`/`cancel` below). A UUID
+        // rather than `""` so two concurrent v1 sends cannot collide on one empty key.
+        let files = try decode(response, as: [String: String].self)
+        return PrepareUploadResponse(sessionId: UUID().uuidString, files: files)
     }
 
     public func upload(
@@ -239,16 +287,28 @@ public struct LocalSendClient: Sendable {
 
     public func cancel(sessionId: String, to peer: RemotePeer? = nil) async throws {
         let peer = try resolvePeer(peer)
+        // v1 carries no `sessionId`: the reference receiver does not read one off a v1 cancel and
+        // instead infers the session, being "a little bit more tolerant"
+        // (`receive_controller.dart:646-696`). Sending our locally synthesized id would be a
+        // fabricated value that a tolerant receiver might try to match against.
         let request = HTTPRequest(
             method: .post,
-            path: "\(LocalSendKit.apiPrefix)/cancel",
-            query: ["sessionId": sessionId],
+            path: LocalSendKit.clientPath(version: peer.apiVersion, route: "cancel"),
+            query: peer.apiVersion == .v1 ? [:] : ["sessionId": sessionId],
             remoteAddress: peer.host
         )
         let response = try await transport.send(request, to: peer)
         try expectSuccess(response)
     }
 
+    /// **Deliberately pinned to the v2 prefix regardless of `peer.apiVersion`** — the one place this
+    /// client does not follow the peer's version.
+    ///
+    /// `api_route_builder.dart` *generates* a `.v1` string for every enum case, but the reference
+    /// only ever *installs* `prepare-download` and `download` on v2
+    /// (`app/lib/provider/network/server/controller/send_controller.dart:82` and `:191`, both
+    /// `ApiRoute.…v2`), and no reference client calls either route. Targeting
+    /// `/api/localsend/v1/prepare-download` would be a route we invented, served by nobody.
     public func prepareDownload(
         from peer: RemotePeer? = nil,
         pin: String? = nil,
@@ -272,6 +332,7 @@ public struct LocalSendClient: Sendable {
         return try decode(response, as: PrepareDownloadResponse.self)
     }
 
+    /// v2-pinned for the same reason as `prepareDownload` above (`send_controller.dart:191`).
     public func download(fileId: String, sessionId: String, from peer: RemotePeer? = nil) async throws -> DownloadedFile {
         let peer = try resolvePeer(peer)
         let request = HTTPRequest(
@@ -297,14 +358,20 @@ public struct LocalSendClient: Sendable {
         progress: (@Sendable (FileTransferProgress) -> Void)?
     ) async throws {
         let peer = try resolvePeer(peer)
+        // v1 validates `fileId` + `token` alone; `sessionId` is required only when v2
+        // (`receive_controller.dart:463-470`). Our v1 session id is locally synthesized, so putting
+        // it on the wire would send the receiver a value that matches nothing it knows.
+        var query = [
+            "fileId": fileId,
+            "token": token
+        ]
+        if peer.apiVersion != .v1 {
+            query["sessionId"] = sessionId
+        }
         let request = HTTPRequest(
             method: .post,
-            path: "\(LocalSendKit.apiPrefix)/upload",
-            query: [
-                "sessionId": sessionId,
-                "fileId": fileId,
-                "token": token
-            ],
+            path: LocalSendKit.clientPath(version: peer.apiVersion, route: "upload"),
+            query: query,
             headers: [
                 "Content-Length": "\(body.byteCount)"
             ],

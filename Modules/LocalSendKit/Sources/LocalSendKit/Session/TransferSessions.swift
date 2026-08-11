@@ -128,7 +128,49 @@ public actor ReceiveSession {
     private var lastFinished: ReceiveSessionSnapshot?
     private var pendingRequest: IncomingTransferRequest?
 
+    #if DEBUG
+    /// Test seam: awaited inside `upload` between the off-actor staging hop and the on-actor finish
+    /// phase — exactly the reentrancy window `finishUpload` is written to survive. Without it the
+    /// interleavings in that window can only be provoked by racing, which is precisely the kind of
+    /// test that turns flaky.
+    ///
+    /// Debug-only and `nil` unless a test installs one, so production behaviour is a single
+    /// `Optional` check on a path that has just done filesystem I/O.
+    private var stagingBarrier: (@Sendable (_ fileId: String) async -> Void)?
+
+    func setStagingBarrier(_ barrier: (@Sendable (_ fileId: String) async -> Void)?) {
+        stagingBarrier = barrier
+    }
+    #endif
+
     public init() {}
+
+    /// Whether a `prepare-upload` arriving right now would be refused as "another session is
+    /// already in progress".
+    ///
+    /// Exists so `handlePrepareUpload` can answer 409 *before* the PIN check, which is the order
+    /// the reference uses (`receive_controller.dart:189-207`: busy check, then PIN, then body
+    /// decode). Read-only — superseding a stale session stays in `prepare` (`:146-153`).
+    ///
+    /// This is deliberately NOT a tight guard. Three suspension points separate it from `prepare`
+    /// (this actor hop, `await pinTracker.validate`, and the body decode), so a session can be
+    /// installed in between; the `.blocked` case out of `prepare` remains the authoritative check.
+    /// All this fixes is the ORDERING.
+    ///
+    /// A `.finishedWithErrors` session does not count as busy. That is a deliberate divergence from
+    /// the reference, not a fidelity gap: the reference 409s on a retained errored session until
+    /// the user closes it, but we have no session-close affordance and no session timeout, so
+    /// mirroring it would re-open the "blocks every later transfer forever" bug that
+    /// `TransferSessions.swift:146-153` and `BacklogFixesTests.swift:707` exist to prevent.
+    ///
+    /// Consequence accepted on purpose: an unauthenticated peer can learn our busy-state without
+    /// the PIN. That is exactly what the reference exposes.
+    public func isBusy() -> Bool {
+        if let current, current.status != .finishedWithErrors {
+            return true
+        }
+        return pendingRequest != nil
+    }
 
     public func prepare(
         request: PrepareUploadRequest,
@@ -394,27 +436,102 @@ public actor ReceiveSession {
         return true
     }
 
+    /// Receives one file of a live session.
+    ///
+    /// Three phases, because the middle one is filesystem work and must not run on this actor's
+    /// executor (it would serialize every other session operation — progress updates, cancels,
+    /// sibling uploads — behind a `rename(2)` or, on the `.data` path, a whole synchronous write):
+    ///
+    ///  1. `beginUpload(...)` — on-actor validation and `.transferring` bookkeeping.
+    ///  2. `stage(...)` — OFF-actor, `nonisolated async`, so it hops to the global executor.
+    ///  3. `finishUpload(...)` — on-actor, re-reading `current` FROM SCRATCH.
+    ///
+    /// The hop is `await`ed, never detached: `LocalSendServerRuntime` deletes the staged temporary
+    /// file the moment `server.handle(request)` returns, so a fire-and-forget staging task would
+    /// race its own source file against that deletion.
+    ///
+    /// Because the actor is reentrant across the staging suspension, this is no longer one atomic
+    /// operation. Nothing captured before the suspension may be written back — see
+    /// `finishUpload(...)` for the per-interleaving contract.
     public func upload(
         sessionId: String?,
         fileId: String?,
         token: String?,
         senderIP: String,
         body: HTTPRequestBody
-    ) throws -> UploadFileResult {
+    ) async throws -> UploadFileResult {
         guard let sessionId, let fileId, let token else {
             return .missingParameters
         }
+
+        let destinationURL: URL
+        switch beginUpload(sessionId: sessionId, fileId: fileId, token: token, senderIP: senderIP) {
+        case .refused(let result):
+            return result
+        case .accepted(let url):
+            destinationURL = url
+        }
+
+        // Throws propagate before any `.completed` is recorded. The begin phase has already written
+        // `.transferring` and an optimistic full `bytesReceived`; that is pre-existing behaviour and
+        // `failUpload` is what corrects it.
+        try await Self.stage(body: body, to: destinationURL)
+
+        #if DEBUG
+        if let stagingBarrier {
+            await stagingBarrier(fileId)
+        }
+        #endif
+
+        return finishUpload(
+            sessionId: sessionId,
+            fileId: fileId,
+            token: token,
+            senderIP: senderIP,
+            destinationURL: destinationURL
+        )
+    }
+
+    public func upload(
+        sessionId: String?,
+        fileId: String?,
+        token: String?,
+        senderIP: String,
+        body: Data
+    ) async throws -> UploadFileResult {
+        try await upload(
+            sessionId: sessionId,
+            fileId: fileId,
+            token: token,
+            senderIP: senderIP,
+            body: .data(body)
+        )
+    }
+
+    private enum UploadBeginOutcome {
+        case refused(UploadFileResult)
+        case accepted(destinationURL: URL)
+    }
+
+    /// Phase 1: validation and `.transferring` bookkeeping, byte-for-byte what `upload` used to do
+    /// before it reached `stage`.
+    private func beginUpload(
+        sessionId: String,
+        fileId: String,
+        token: String,
+        senderIP: String
+    ) -> UploadBeginOutcome {
         guard var snapshot = current else {
-            return .blocked
+            return .refused(.blocked)
         }
         guard snapshot.sessionId == sessionId, snapshot.senderIP == senderIP else {
-            return .forbidden
+            return .refused(.forbidden)
         }
         guard Self.acceptsUploads(snapshot.status) else {
-            return .blocked
+            return .refused(.blocked)
         }
         guard let fileRecord = snapshot.files[fileId], fileRecord.token == token else {
-            return .forbidden
+            return .refused(.forbidden)
         }
 
         let completedBytes = completedBytesExcludingCurrentFile(in: snapshot, currentFileID: fileId)
@@ -424,12 +541,77 @@ public actor ReceiveSession {
         snapshot.currentFileBytesReceived = fileRecord.file.size
         snapshot.bytesReceived = min(snapshot.totalBytes, completedBytes + fileRecord.file.size)
         snapshot.files[fileId]?.status = .transferring
-        try Self.stage(body: body, to: fileRecord.destinationURL)
+        current = snapshot
+        return .accepted(destinationURL: fileRecord.destinationURL)
+    }
+
+    /// Phase 3: apply completion, from a FRESH read of `current`.
+    ///
+    /// The actor was reentrant for the whole staging hop, so the snapshot phase 1 saw may be
+    /// arbitrarily stale. Writing it back would clobber whatever happened meanwhile — most
+    /// destructively, a sibling upload's `.completed`, which would strand the session in
+    /// `.transferring` forever. So only `files[fileId]` and the aggregates derived from the fresh
+    /// map are written.
+    ///
+    /// The interleavings this has to survive:
+    ///
+    ///  - **Canceled (network or local), or torn down by a sibling `failUpload`** — `current` is
+    ///    gone and `lastFinished` is not a completion of our session. Do not resurrect it, and
+    ///    delete the file we just moved: `stage` moves into the USER'S SAVE FOLDER, so leaving it
+    ///    would drop a file into Downloads for a transfer the UI says was canceled.
+    ///  - **Superseded by a new `prepare`** — `current.sessionId` is someone else's. Same handling.
+    ///  - **A concurrent sibling upload of a different `fileId`** — set only our own record and
+    ///    recompute; the sibling's record is preserved because we never write back a stale map.
+    ///  - **A concurrent retry of the SAME `fileId`** — both stage to the same destination (the
+    ///    second `moveItem` falls through to `replaceItemAt`), and whichever finishes first may
+    ///    observe `allExist` and close the session. The loser then finds `current == nil` with
+    ///    `lastFinished` being our own finished session, and must answer `.success`: the bytes were
+    ///    delivered, and a 409 would make the sender retry into `resolveDestination`'s ` (2)`
+    ///    probe, producing a duplicate file.
+    private func finishUpload(
+        sessionId: String,
+        fileId: String,
+        token: String,
+        senderIP: String,
+        destinationURL: URL
+    ) -> UploadFileResult {
+        /// Undo of the move performed by `stage`. Best-effort: the file may already have been moved
+        /// or replaced by whoever tore the session down.
+        func discardStagedDestination() {
+            try? FileManager.default.removeItem(at: destinationURL)
+        }
+
+        guard var snapshot = current else {
+            if let lastFinished, lastFinished.sessionId == sessionId, lastFinished.status == .finished {
+                // Lost the race with a concurrent retry of the same file that already closed the
+                // session. The bytes ARE on disk under our destination; report success.
+                return .success
+            }
+            discardStagedDestination()
+            return .blocked
+        }
+        guard snapshot.sessionId == sessionId else {
+            discardStagedDestination()
+            return .blocked
+        }
+        guard snapshot.senderIP == senderIP else {
+            return .forbidden
+        }
+        guard let fileRecord = snapshot.files[fileId], fileRecord.token == token else {
+            return .forbidden
+        }
 
         // This file is on disk now. Recording it on the record itself is what clears a previous
         // failure for it — a retry that clears the last outstanding failure brings the session
         // back to `.finished`.
         snapshot.files[fileId]?.status = .completed
+        if snapshot.currentFileID == fileId {
+            // Only ever adjusted when the in-flight file is still ours; a sibling upload may own it
+            // by now, and stomping it would reset that transfer's progress readout.
+            snapshot.currentFileTotalBytes = fileRecord.file.size
+            snapshot.currentFileBytesReceived = fileRecord.file.size
+        }
+        snapshot.bytesReceived = Self.recomputedBytesReceived(in: snapshot)
 
         let allExist = snapshot.files.values.allSatisfy { $0.status == .completed }
         if allExist {
@@ -457,20 +639,22 @@ public actor ReceiveSession {
         return .success
     }
 
-    public func upload(
-        sessionId: String?,
-        fileId: String?,
-        token: String?,
-        senderIP: String,
-        body: Data
-    ) throws -> UploadFileResult {
-        try upload(
-            sessionId: sessionId,
-            fileId: fileId,
-            token: token,
-            senderIP: senderIP,
-            body: .data(body)
-        )
+    /// Session-level progress recomputed from the per-file map, rather than from a captured
+    /// "bytes before this file" total that a concurrent sibling may have invalidated.
+    private static func recomputedBytesReceived(in snapshot: ReceiveSessionSnapshot) -> Int64 {
+        let completedBytes = snapshot.files.values.reduce(Int64.zero) { partialResult, record in
+            partialResult + (record.status == .completed ? record.file.size : 0)
+        }
+        // Whatever file is currently streaming contributes its partial byte count on top — unless it
+        // has already completed, in which case `completedBytes` counts it in full.
+        let inFlightBytes: Int64
+        if let currentFileID = snapshot.currentFileID,
+           snapshot.files[currentFileID]?.status == .transferring {
+            inFlightBytes = snapshot.currentFileBytesReceived
+        } else {
+            inFlightBytes = 0
+        }
+        return min(snapshot.totalBytes, completedBytes + inFlightBytes)
     }
 
     /// Withdraws an accept/decline prompt that is still in flight, on behalf of a `/cancel` from
@@ -658,7 +842,16 @@ public actor ReceiveSession {
         }
     }
 
-    private static func stage(body: HTTPRequestBody, to destinationURL: URL) throws {
+    /// Phase 2 of `upload`: the filesystem work, deliberately OFF the actor.
+    ///
+    /// `nonisolated async` is what buys that. `static` alone would not: a static member called
+    /// synchronously from an isolated context still runs on the actor's executor, so the I/O would
+    /// keep blocking every other session operation. An `async` nonisolated function hops to the
+    /// global executor instead, and the caller's `await` is the reentrancy point the finish phase
+    /// is written to survive.
+    ///
+    /// The body below is unchanged from when this ran on the actor.
+    private nonisolated static func stage(body: HTTPRequestBody, to destinationURL: URL) async throws {
         // Intermediate directories are created HERE rather than in `prepare`, so a rejected or
         // canceled transfer never leaves an empty directory tree behind. The failure mode this
         // introduces is a *file* already occupying a path a later file needs as a directory

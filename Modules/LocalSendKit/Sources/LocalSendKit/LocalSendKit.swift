@@ -31,6 +31,49 @@ public enum LocalSendKit {
                 return LocalSendKit.apiPrefix
             }
         }
+
+        /// The ONE place the "is this peer a v1 peer?" decision is made, so it cannot drift between
+        /// the discovery register reply and the send path.
+        ///
+        /// `ApiRoute.target` (`common/lib/api_route_builder.dart:33`) is strict string equality —
+        /// `target.version == '1.0'`. Deliberately not a `hasPrefix` check: `"1.0.0"` and `"1.1"`
+        /// are v2 to the reference, and being more "helpful" here would route a v2 peer to routes it
+        /// does not serve.
+        ///
+        /// `nil` maps to `.v2` because callers reach this with an already-resolved version string —
+        /// `RegisterInfo`/`MulticastMessage` decoding substitutes `fallbackProtocolVersion` for an
+        /// absent `version` (`register_dto.dart:38`), so an absent version has already become
+        /// `"1.0"` by the time it gets here and a `nil` at this point means "no peer information at
+        /// all", where today's v2 default is the safe answer.
+        public init(protocolVersion: String?) {
+            self = protocolVersion == LocalSendKit.fallbackProtocolVersion ? .v1 : .v2
+        }
+    }
+
+    /// The CLIENT-side counterpart of `canonicalRoute`: takes a canonical (v2) route name and
+    /// returns the full path to POST/GET at a peer speaking `version`.
+    ///
+    /// This is `ApiRoute.target` (`common/lib/api_route_builder.dart:28-36`), which selects the path
+    /// for *every* route from the target's version — not just `register`.
+    ///
+    /// **It is not the inverse of `canonicalRoute` and must never be folded into one bidirectional
+    /// map.** `canonicalRoute(.v1, "upload")` returns `nil` on purpose, so that an inbound
+    /// `/api/localsend/v1/upload` stays a 404 (the reference installs only the legacy spelling on
+    /// v1); `clientPath(.v1, "upload")` must nevertheless return `/api/localsend/v1/send`. What the
+    /// two share is the rename-pair list only, and there are exactly two pairs
+    /// (`api_route_builder.dart:9-10`) — everything else keeps its name in both versions.
+    public static func clientPath(version: APIVersion, route: String) -> String {
+        guard version == .v1 else {
+            return "\(version.prefix)/\(route)"
+        }
+        switch route {
+        case "prepare-upload":
+            return "\(APIVersion.v1.prefix)/send-request"
+        case "upload":
+            return "\(APIVersion.v1.prefix)/send"
+        default:
+            return "\(APIVersion.v1.prefix)/\(route)"
+        }
     }
 
     /// Single source of truth for the LocalSend route table. Both `LocalSendServer.handle` and

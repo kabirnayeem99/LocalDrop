@@ -53,6 +53,38 @@ struct CryptoTests {
         }
     }
 
+    @Test func expiredStoredIdentityIsRegenerated() throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        let identityURL = directory.appendingPathComponent("identity.json")
+        let store = FileCertificateStore(identityURL: identityURL)
+        let authority = CertificateAuthority(store: store)
+
+        let past = Date(timeIntervalSince1970: 1_700_000_000)
+        let farFuture = past.addingTimeInterval(60 * 60 * 24 * 365 * 20)
+
+        let first = try authority.loadOrCreateIdentity(now: past)
+        let second = try authority.loadOrCreateIdentity(now: farFuture)
+
+        #expect(first != second)
+        try authority.validate(certificateDER: second.certificateDER, now: farFuture)
+        #expect(try store.loadIdentity() == second)
+        try authority.reset()
+    }
+
+    @Test func nonExpiredStoredIdentityIsNotRegenerated() throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        let identityURL = directory.appendingPathComponent("identity.json")
+        let store = FileCertificateStore(identityURL: identityURL)
+        let authority = CertificateAuthority(store: store)
+
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let first = try authority.loadOrCreateIdentity(now: now)
+        let second = try authority.loadOrCreateIdentity(now: now.addingTimeInterval(60 * 60))
+
+        #expect(first == second)
+        try authority.reset()
+    }
+
     @Test func tamperedCertificateFailsValidation() throws {
         let authority = CertificateAuthority(store: FileCertificateStore(identityURL: URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)))
         let identity = try authority.generateIdentity()

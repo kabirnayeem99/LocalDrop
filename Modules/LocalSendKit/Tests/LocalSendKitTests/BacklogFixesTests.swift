@@ -753,3 +753,454 @@ struct PartialFailureRetryTests {
         #expect(await session.cancel(sessionId: "S1", senderIP: "10.0.0.4") == false)
     }
 }
+
+// MARK: - Item 37: progress coalescing
+
+struct ProgressCoalescerTests {
+    /// `#expect` captures its expression immutably, so `shouldReport` (which is `mutating`) has to
+    /// be called into a local first.
+    private func makeCoalescer(bytes: Int64, seconds: TimeInterval, clock: MutableClock) -> ProgressCoalescer {
+        ProgressCoalescer(
+            byteThreshold: bytes,
+            timeThreshold: seconds,
+            now: { clock.current.timeIntervalSince1970 }
+        )
+    }
+
+    /// The first sample always publishes — otherwise a transfer smaller than the byte threshold
+    /// would show no progress at all until it finished.
+    @Test func theFirstSampleAlwaysReports() {
+        let clock = MutableClock(Date(timeIntervalSince1970: 0))
+        var coalescer = makeCoalescer(bytes: 1_000, seconds: 10, clock: clock)
+        let first = coalescer.shouldReport(bytes: 1)
+        #expect(first)
+    }
+
+    /// Samples below both thresholds are dropped — this is the ~16,000-updates-per-GB fix.
+    @Test func samplesBelowBothThresholdsAreDropped() {
+        let clock = MutableClock(Date(timeIntervalSince1970: 0))
+        var coalescer = makeCoalescer(bytes: 1_000, seconds: 10, clock: clock)
+        _ = coalescer.shouldReport(bytes: 0)
+
+        clock.current = Date(timeIntervalSince1970: 1)
+        let small = coalescer.shouldReport(bytes: 100)
+        let alsoSmall = coalescer.shouldReport(bytes: 200)
+        #expect(small == false)
+        #expect(alsoSmall == false)
+    }
+
+    /// Crossing the byte threshold publishes, and resets the baseline.
+    @Test func crossingTheByteThresholdReports() {
+        let clock = MutableClock(Date(timeIntervalSince1970: 0))
+        var coalescer = makeCoalescer(bytes: 1_000, seconds: 10, clock: clock)
+        _ = coalescer.shouldReport(bytes: 0)
+
+        let justUnder = coalescer.shouldReport(bytes: 999)
+        let atThreshold = coalescer.shouldReport(bytes: 1_000)
+        // Baseline moved to 1_000, so the next 500 bytes are below threshold again.
+        let afterReset = coalescer.shouldReport(bytes: 1_500)
+        #expect(justUnder == false)
+        #expect(atThreshold)
+        #expect(afterReset == false)
+    }
+
+    /// Bytes-only would go silent on a slow link, so time alone must also publish.
+    @Test func crossingTheTimeThresholdReportsEvenOnASlowTransfer() {
+        let clock = MutableClock(Date(timeIntervalSince1970: 0))
+        var coalescer = makeCoalescer(bytes: 1_000_000, seconds: 0.1, clock: clock)
+        _ = coalescer.shouldReport(bytes: 0)
+
+        let tooSoon = coalescer.shouldReport(bytes: 10)
+        clock.current = Date(timeIntervalSince1970: 5)
+        let afterTime = coalescer.shouldReport(bytes: 20)
+        #expect(tooSoon == false)
+        #expect(afterTime, "a slow transfer must still repaint on the time threshold")
+    }
+
+    /// A stale out-of-order sample must never walk the count backwards.
+    @Test func aBackwardsSampleIsNeverReported() {
+        let clock = MutableClock(Date(timeIntervalSince1970: 0))
+        var coalescer = makeCoalescer(bytes: 10, seconds: 0.001, clock: clock)
+        _ = coalescer.shouldReport(bytes: 5_000)
+
+        clock.current = Date(timeIntervalSince1970: 100)
+        let backwards = coalescer.shouldReport(bytes: 4_000)
+        let unchanged = coalescer.shouldReport(bytes: 5_000)
+        #expect(backwards == false)
+        #expect(unchanged == false)
+    }
+
+    /// The box is what the non-isolated progress callback actually touches.
+    @Test func theBoxSharesOneCoalescerAcrossCalls() {
+        let box = ProgressCoalescerBox(ProgressCoalescer(byteThreshold: 100, timeThreshold: 3_600))
+        #expect(box.shouldReport(bytes: 0))
+        #expect(box.shouldReport(bytes: 50) == false)
+        #expect(box.shouldReport(bytes: 100))
+    }
+}
+
+// MARK: - Item 39: per-file receive status replaces stat polling
+
+struct ReceivedFileStatusTests {
+    private func twoFileRequest() -> PrepareUploadRequest {
+        PrepareUploadRequest(
+            info: RegisterInfo(alias: "Sender", version: "2.0", fingerprint: "SND"),
+            files: [
+                "a": FileDto(id: "a", fileName: "a.txt", size: 4, fileType: "text/plain"),
+                "b": FileDto(id: "b", fileName: "b.txt", size: 4, fileType: "text/plain")
+            ]
+        )
+    }
+
+    /// Session state must come from tracked per-file status, not from `stat`-ing the destination.
+    @Test func perFileStatusTracksTheTransferWithoutTouchingTheFilesystem() async throws {
+        let storage = makeStorageDirectory()
+        let session = ReceiveSession()
+        _ = try await session.prepare(
+            request: twoFileRequest(),
+            senderIP: "10.0.0.7",
+            policy: .acceptAll,
+            destinationDirectory: storage,
+            sessionIdFactory: { "S1" },
+            tokenFactory: { "token-\($0)" }
+        )
+
+        let queued = try #require(await session.snapshot())
+        #expect(queued.files["a"]?.status == .queued)
+        #expect(queued.files["b"]?.status == .queued)
+
+        _ = try await session.upload(sessionId: "S1", fileId: "a", token: "token-a", senderIP: "10.0.0.7", body: Data("aaaa".utf8))
+        let midway = try #require(await session.snapshot())
+        #expect(midway.files["a"]?.status == .completed)
+        #expect(midway.files["b"]?.status == .queued)
+        #expect(midway.status == .transferring)
+
+        _ = try await session.upload(sessionId: "S1", fileId: "b", token: "token-b", senderIP: "10.0.0.7", body: Data("bbbb".utf8))
+        let done = try #require(await session.snapshot())
+        #expect(done.status == .finished)
+        #expect(done.files.values.allSatisfy { $0.status == .completed })
+    }
+
+    /// Deleting a completed destination underneath the session must NOT rewrite session state —
+    /// this is the concrete misbehaviour the `fileExists` polling had.
+    @Test func removingAFinishedFileDoesNotRewriteSessionState() async throws {
+        let storage = makeStorageDirectory()
+        let session = ReceiveSession()
+        _ = try await session.prepare(
+            request: twoFileRequest(),
+            senderIP: "10.0.0.7",
+            policy: .acceptAll,
+            destinationDirectory: storage,
+            sessionIdFactory: { "S1" },
+            tokenFactory: { "token-\($0)" }
+        )
+        _ = try await session.upload(sessionId: "S1", fileId: "a", token: "token-a", senderIP: "10.0.0.7", body: Data("aaaa".utf8))
+
+        // The user (or anything else) removes the saved file mid-session.
+        try FileManager.default.removeItem(at: storage.appendingPathComponent("a.txt"))
+
+        _ = try await session.upload(sessionId: "S1", fileId: "b", token: "token-b", senderIP: "10.0.0.7", body: Data("bbbb".utf8))
+
+        let done = try #require(await session.snapshot())
+        // Under `fileExists` polling the vanished "a" made the session never reach `.finished`.
+        #expect(done.status == .finished)
+        #expect(done.files["a"]?.status == .completed)
+    }
+
+    /// `failedFileIDs` is derived from the per-file statuses, so there is one source of truth.
+    @Test func failedFileIDsIsDerivedFromPerFileStatus() async throws {
+        let storage = makeStorageDirectory()
+        let session = ReceiveSession()
+        _ = try await session.prepare(
+            request: twoFileRequest(),
+            senderIP: "10.0.0.7",
+            policy: .acceptAll,
+            destinationDirectory: storage,
+            sessionIdFactory: { "S1" },
+            tokenFactory: { "token-\($0)" }
+        )
+        _ = try await session.upload(sessionId: "S1", fileId: "a", token: "token-a", senderIP: "10.0.0.7", body: Data("aaaa".utf8))
+        _ = await session.failUpload(sessionId: "S1", fileId: "b", senderIP: "10.0.0.7")
+
+        let snapshot = try #require(await session.snapshot())
+        #expect(snapshot.files["b"]?.status == .failed)
+        #expect(snapshot.failedFileIDs == ["b"])
+
+        // A successful retry clears both the status and the derived set.
+        _ = try await session.upload(sessionId: "S1", fileId: "b", token: "token-b", senderIP: "10.0.0.7", body: Data("bbbb".utf8))
+        let retried = try #require(await session.snapshot())
+        #expect(retried.files["b"]?.status == .completed)
+        #expect(retried.failedFileIDs.isEmpty)
+    }
+}
+
+// MARK: - Item 49: busy check runs before the PIN check
+
+private func makePINServer(storageDirectory: URL, pin: String) -> LocalSendServer {
+    LocalSendServer(
+        configuration: LocalSendServerConfiguration(
+            registerInfo: RegisterInfo(
+                alias: "Receiver",
+                deviceModel: "Mac",
+                deviceType: .desktop,
+                fingerprint: "ABC",
+                port: 53317,
+                protocolType: .https,
+                download: false
+            ),
+            pin: pin,
+            uploadPolicy: .acceptAll,
+            allowDownloads: true,
+            storageDirectory: storageDirectory
+        )
+    )
+}
+
+struct PrepareUploadBusyBeforePINTests {
+    private func request(files: [String: FileDto]) -> PrepareUploadRequest {
+        PrepareUploadRequest(
+            info: RegisterInfo(alias: "Sender", version: "2.0", fingerprint: "SND", port: 53317, protocolType: .https),
+            files: files
+        )
+    }
+
+    private func oneFileRequest() -> PrepareUploadRequest {
+        request(files: ["a": FileDto(id: "a", fileName: "a.txt", size: 4, fileType: "text/plain")])
+    }
+
+    private func twoFileRequest() -> PrepareUploadRequest {
+        request(files: [
+            "a": FileDto(id: "a", fileName: "a.txt", size: 4, fileType: "text/plain"),
+            "b": FileDto(id: "b", fileName: "b.txt", size: 4, fileType: "text/plain")
+        ])
+    }
+
+    private func prepareRequest(
+        _ payload: PrepareUploadRequest,
+        pin: String?,
+        from senderIP: String
+    ) throws -> HTTPRequest {
+        let body = try JSONEncoder().encode(payload)
+        return HTTPRequest(
+            method: .post,
+            path: "\(LocalSendKit.apiPrefix)/prepare-upload",
+            query: pin.map { ["pin": $0] } ?? [:],
+            headers: ["Content-Length": "\(body.count)"],
+            body: body,
+            remoteAddress: senderIP
+        )
+    }
+
+    /// A busy receiver answers 409 *before* looking at the PIN, as the reference does
+    /// (`receive_controller.dart:189-207`). The load-bearing half is the second assertion: a
+    /// wrong-PIN probe against a receiver that was never going to accept must not burn one of the
+    /// sender's three attempts and lock it out of the transfer it retries later.
+    @Test func aBusyReceiverAnswers409WithoutConsumingAPINAttempt() async throws {
+        let server = makePINServer(storageDirectory: makeStorageDirectory(), pin: "123456")
+
+        let first = try await server.handle(prepareRequest(oneFileRequest(), pin: "123456", from: "10.0.0.4"))
+        #expect(first.statusCode == 200)
+
+        // Wrong PIN *and* busy. Busy wins, and the guess is never evaluated.
+        for _ in 0..<5 {
+            let blocked = try await server.handle(prepareRequest(oneFileRequest(), pin: "000000", from: "10.0.0.5"))
+            #expect(blocked.statusCode == 409)
+        }
+        #expect(await server.pinAttempts(for: "10.0.0.5") == 0)
+    }
+
+    /// A retained `.finishedWithErrors` session is deliberately NOT busy — there is no
+    /// session-close affordance and no timeout, so counting it would block every later transfer
+    /// forever (the trap `aNewPrepareSupersedesARetainedFinishedWithErrorsSession` covers at the
+    /// actor level). Asserted here through the new pre-check, with a PIN configured.
+    @Test func aFinishedWithErrorsSessionIsNotBusyAtThePreCheck() async throws {
+        let server = makePINServer(storageDirectory: makeStorageDirectory(), pin: "123456")
+
+        let prepared = try await server.handle(prepareRequest(twoFileRequest(), pin: "123456", from: "10.0.0.4"))
+        #expect(prepared.statusCode == 200)
+        let response = try JSONDecoder().decode(PrepareUploadResponse.self, from: prepared.body.loadData())
+
+        let uploaded = try await server.handle(
+            HTTPRequest(
+                method: .post,
+                path: "\(LocalSendKit.apiPrefix)/upload",
+                query: [
+                    "sessionId": response.sessionId,
+                    "fileId": "a",
+                    "token": try #require(response.files["a"])
+                ],
+                body: Data("aaaa".utf8),
+                remoteAddress: "10.0.0.4"
+            )
+        )
+        #expect(uploaded.statusCode == 200)
+
+        await server.failStreamingUpload(sessionId: response.sessionId, fileId: "b", senderIP: "10.0.0.4")
+        #expect(await server.receiveSnapshot()?.status == .finishedWithErrors)
+
+        // Not busy: a correct-PIN prepare supersedes the retained session rather than 409ing.
+        let second = try await server.handle(prepareRequest(oneFileRequest(), pin: "123456", from: "10.0.0.6"))
+        #expect(second.statusCode == 200)
+    }
+}
+
+// MARK: - Item 55: `upload` staging runs off the actor, finish re-reads from scratch
+
+/// Releases every participant only once `partySize` of them have arrived.
+///
+/// Used to pin the reentrancy window open deterministically: without it the interleavings the
+/// finish phase is written to survive can only be provoked by racing, which is exactly the kind of
+/// test that turns flaky.
+private actor StagingRendezvous {
+    private let partySize: Int
+    private var arrived = 0
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    init(partySize: Int) {
+        self.partySize = partySize
+    }
+
+    func arrive() async {
+        arrived += 1
+        guard arrived < partySize else {
+            let pending = waiters
+            waiters.removeAll()
+            for waiter in pending {
+                waiter.resume()
+            }
+            return
+        }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+}
+
+struct UploadStagingReentrancyTests {
+    private func twoFileRequest() -> PrepareUploadRequest {
+        PrepareUploadRequest(
+            info: RegisterInfo(alias: "Sender", version: "2.0", fingerprint: "SND"),
+            files: [
+                "a": FileDto(id: "a", fileName: "a.txt", size: 4, fileType: "text/plain"),
+                "b": FileDto(id: "b", fileName: "b.txt", size: 4, fileType: "text/plain")
+            ]
+        )
+    }
+
+    private func oneFileRequest() -> PrepareUploadRequest {
+        PrepareUploadRequest(
+            info: RegisterInfo(alias: "Sender", version: "2.0", fingerprint: "SND"),
+            files: ["a": FileDto(id: "a", fileName: "a.txt", size: 4, fileType: "text/plain")]
+        )
+    }
+
+    /// The F6 regression: both finish phases run after both staging hops, so the second one resumes
+    /// holding a snapshot that predates the first one's `.completed`. Writing that stale snapshot
+    /// back would lose the sibling's completion and strand the session in `.transferring` forever.
+    @Test func twoConcurrentUploadsOfDifferentFilesBothComplete() async throws {
+        let storage = makeStorageDirectory()
+        let session = ReceiveSession()
+        _ = try await session.prepare(
+            request: twoFileRequest(),
+            senderIP: "10.0.0.4",
+            policy: .acceptAll,
+            destinationDirectory: storage,
+            sessionIdFactory: { "S1" },
+            tokenFactory: { "token-\($0)" }
+        )
+
+        // Neither upload may finish until both have staged.
+        let rendezvous = StagingRendezvous(partySize: 2)
+        await session.setStagingBarrier { _ in await rendezvous.arrive() }
+
+        async let first = session.upload(
+            sessionId: "S1", fileId: "a", token: "token-a", senderIP: "10.0.0.4", body: Data("aaaa".utf8)
+        )
+        async let second = session.upload(
+            sessionId: "S1", fileId: "b", token: "token-b", senderIP: "10.0.0.4", body: Data("bbbb".utf8)
+        )
+        let results = try await [first, second]
+        #expect(results == [.success, .success])
+
+        await session.setStagingBarrier(nil)
+
+        let snapshot = try #require(await session.snapshot())
+        #expect(snapshot.files["a"]?.status == .completed)
+        #expect(snapshot.files["b"]?.status == .completed)
+        #expect(snapshot.status == .finished)
+        #expect(snapshot.bytesReceived == snapshot.totalBytes)
+    }
+
+    /// `stage` moves into the USER'S SAVE FOLDER, so a session torn down while the hop was in
+    /// flight must not leave the file sitting in Downloads for a transfer the UI says was canceled.
+    @Test func cancelDuringStagingLeavesNothingInTheSaveFolder() async throws {
+        let storage = makeStorageDirectory()
+        let session = ReceiveSession()
+        _ = try await session.prepare(
+            request: oneFileRequest(),
+            senderIP: "10.0.0.4",
+            policy: .acceptAll,
+            destinationDirectory: storage,
+            sessionIdFactory: { "S1" },
+            tokenFactory: { "token-\($0)" }
+        )
+
+        // The cancel lands in the exact window between the move and the finish phase.
+        await session.setStagingBarrier { [session] _ in
+            _ = await session.cancelLocally(sessionId: "S1")
+        }
+
+        let result = try await session.upload(
+            sessionId: "S1", fileId: "a", token: "token-a", senderIP: "10.0.0.4", body: Data("aaaa".utf8)
+        )
+        await session.setStagingBarrier(nil)
+
+        // `.blocked` is a 409: the session is gone, so a sender retry gets 409 again rather than
+        // walking `resolveDestination`'s ` (2)` probe into a duplicate.
+        #expect(result == .blocked)
+        #expect(await session.snapshot()?.status == .canceled)
+
+        let leftovers = try FileManager.default.contentsOfDirectory(
+            at: storage,
+            includingPropertiesForKeys: nil
+        )
+        #expect(leftovers.isEmpty, "canceled transfer left \(leftovers.map(\.lastPathComponent)) behind")
+    }
+
+    /// The F8 contract. Two retries of the same file both deliver the bytes; whichever finish phase
+    /// runs second finds the session already closed by the first and must still answer `.success`.
+    /// A 409 for bytes we actually wrote would make the sender retry into the ` (2)` probe.
+    @Test func theLoserOfAConcurrentSameFileRetryReportsSuccess() async throws {
+        let storage = makeStorageDirectory()
+        let session = ReceiveSession()
+        _ = try await session.prepare(
+            request: oneFileRequest(),
+            senderIP: "10.0.0.4",
+            policy: .acceptAll,
+            destinationDirectory: storage,
+            sessionIdFactory: { "S1" },
+            tokenFactory: { "token-\($0)" }
+        )
+
+        let rendezvous = StagingRendezvous(partySize: 2)
+        await session.setStagingBarrier { _ in await rendezvous.arrive() }
+
+        async let first = session.upload(
+            sessionId: "S1", fileId: "a", token: "token-a", senderIP: "10.0.0.4", body: Data("aaaa".utf8)
+        )
+        async let second = session.upload(
+            sessionId: "S1", fileId: "a", token: "token-a", senderIP: "10.0.0.4", body: Data("aaaa".utf8)
+        )
+        let results = try await [first, second]
+        await session.setStagingBarrier(nil)
+
+        #expect(results == [.success, .success])
+        #expect(await session.snapshot()?.status == .finished)
+
+        // Exactly one file, under its real name — no ` (2)` duplicate.
+        let saved = try FileManager.default.contentsOfDirectory(at: storage, includingPropertiesForKeys: nil)
+            .map(\.lastPathComponent)
+            .sorted()
+        #expect(saved == ["a.txt"])
+    }
+}

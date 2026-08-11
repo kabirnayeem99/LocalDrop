@@ -134,24 +134,29 @@ public struct LocalSendRuntimeSnapshot: Equatable, Sendable {
     }
 }
 
+/// A prompt appearing, or that same prompt being withdrawn by the network side (a sender-initiated
+/// `/cancel` arriving while the accept/decline prompt is still up) rather than answered by the user.
+public enum IncomingTransferRequestEvent: Sendable, Equatable {
+    case request(IncomingTransferRequest)
+    case withdrawal(requestID: String)
+}
+
 public final class IncomingTransferRequestBridge: @unchecked Sendable {
     private let state = IncomingTransferRequestBridgeState()
 
     public init() {}
 
-    public func requests() async -> AsyncStream<IncomingTransferRequest> {
-        await state.requests()
-    }
-
-    /// Ids of prompts that were withdrawn by the network side (a sender-initiated `/cancel`
-    /// arriving while the accept/decline prompt is still up) rather than answered by the user.
+    /// Prompts and their withdrawals on ONE ordered stream.
     ///
-    /// This is deliberately a *second, additive* stream rather than an event enum on
-    /// `requests()`: changing that element type would break `LocalSendNode.incomingTransferRequests()`,
-    /// the adapter's mapping loop and the store binding, across a boundary where two different
-    /// types already share the name `IncomingTransferRequest`.
-    public func withdrawals() async -> AsyncStream<String> {
-        await state.withdrawals()
+    /// Deliberately a single event enum rather than two additive streams: a withdrawal is only ever
+    /// emitted for a request that was already emitted (`withdraw(requestID:)` is a no-op unless
+    /// `awaitDecision(for:)` registered the matching decision continuation), so the source ordering
+    /// is already total. Fanning the two facts out over separate continuation sets would hand them
+    /// to separate consumers and manufacture an out-of-order case the producer cannot actually
+    /// produce. One continuation set is what makes request-before-withdrawal hold for *every*
+    /// subscriber, all the way down to the UI.
+    public func events() async -> AsyncStream<IncomingTransferRequestEvent> {
+        await state.events()
     }
 
     /// Resolves an in-flight prompt as a rejection without disturbing the request stream.
@@ -183,32 +188,22 @@ public final class IncomingTransferRequestBridge: @unchecked Sendable {
 
 private actor IncomingTransferRequestBridgeState {
     private var activeRequest: IncomingTransferRequest?
-    private var requestContinuations: [UUID: AsyncStream<IncomingTransferRequest>.Continuation] = [:]
-    private var withdrawalContinuations: [UUID: AsyncStream<String>.Continuation] = [:]
+    private var eventContinuations: [UUID: AsyncStream<IncomingTransferRequestEvent>.Continuation] = [:]
     private var decisionContinuations: [String: CheckedContinuation<IncomingTransferDecision, Never>] = [:]
 
-    func requests() -> AsyncStream<IncomingTransferRequest> {
+    /// A new subscriber is replayed the pending `activeRequest` (as `.request`) if there is one.
+    /// Withdrawals are never replayed, which falls out naturally: only `activeRequest` is retained,
+    /// and `withdraw` clears it before yielding.
+    func events() -> AsyncStream<IncomingTransferRequestEvent> {
         let id = UUID()
         return AsyncStream { continuation in
-            requestContinuations[id] = continuation
+            eventContinuations[id] = continuation
             if let activeRequest {
-                continuation.yield(activeRequest)
+                continuation.yield(.request(activeRequest))
             }
             continuation.onTermination = { [weak self] _ in
                 Task {
-                    await self?.removeRequestContinuation(id: id)
-                }
-            }
-        }
-    }
-
-    func withdrawals() -> AsyncStream<String> {
-        let id = UUID()
-        return AsyncStream { continuation in
-            withdrawalContinuations[id] = continuation
-            continuation.onTermination = { [weak self] _ in
-                Task {
-                    await self?.removeWithdrawalContinuation(id: id)
+                    await self?.removeEventContinuation(id: id)
                 }
             }
         }
@@ -223,10 +218,11 @@ private actor IncomingTransferRequestBridgeState {
     /// whoever removes the continuation first wins, and the loser is a no-op. A
     /// `CheckedContinuation` resumed twice traps, so this must be airtight.
     ///
-    /// Note what it deliberately does NOT do: touch `requestContinuations`. `finishPending`
+    /// Note what it deliberately does NOT do: *finish* `eventContinuations`. `finishPending`
     /// finishes them all and clears them, which would permanently kill the adapter's `for await`
     /// loop — `bindNodeObservers()` is only called from `start()`, so a single cancel would leave
-    /// the app unable to show any further prompt until a full runtime restart.
+    /// the app unable to show any further prompt until a full runtime restart. Yielding a
+    /// `.withdrawal` into that same set is exactly what keeps it ordered behind its `.request`.
     func withdraw(requestID: String) -> Bool {
         guard let continuation = decisionContinuations.removeValue(forKey: requestID) else {
             return false
@@ -234,8 +230,8 @@ private actor IncomingTransferRequestBridgeState {
         if activeRequest?.id == requestID {
             activeRequest = nil
         }
-        for withdrawalContinuation in withdrawalContinuations.values {
-            withdrawalContinuation.yield(requestID)
+        for eventContinuation in eventContinuations.values {
+            eventContinuation.yield(.withdrawal(requestID: requestID))
         }
         continuation.resume(returning: .reject)
         return true
@@ -243,8 +239,8 @@ private actor IncomingTransferRequestBridgeState {
 
     func awaitDecision(for request: IncomingTransferRequest) async -> IncomingTransferDecision {
         activeRequest = request
-        for continuation in requestContinuations.values {
-            continuation.yield(request)
+        for continuation in eventContinuations.values {
+            continuation.yield(.request(request))
         }
 
         return await withCheckedContinuation { continuation in
@@ -269,24 +265,16 @@ private actor IncomingTransferRequestBridgeState {
         let pending = decisionContinuations
         decisionContinuations.removeAll()
         activeRequest = nil
-        for continuation in requestContinuations.values {
+        for continuation in eventContinuations.values {
             continuation.finish()
         }
-        requestContinuations.removeAll()
-        for continuation in withdrawalContinuations.values {
-            continuation.finish()
-        }
-        withdrawalContinuations.removeAll()
+        eventContinuations.removeAll()
         for continuation in pending.values {
             continuation.resume(returning: decision)
         }
     }
 
-    private func removeRequestContinuation(id: UUID) {
-        requestContinuations.removeValue(forKey: id)
-    }
-
-    private func removeWithdrawalContinuation(id: UUID) {
-        withdrawalContinuations.removeValue(forKey: id)
+    private func removeEventContinuation(id: UUID) {
+        eventContinuations.removeValue(forKey: id)
     }
 }

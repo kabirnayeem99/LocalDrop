@@ -53,9 +53,18 @@ public struct LocalSendClientFactory: Sendable {
         self.timeoutConfiguration = timeoutConfiguration
     }
 
-    public func makeClient(host: String, port: Int, protocolType: ProtocolType, fingerprint: String) -> LocalSendClient {
+    /// `apiVersion` defaults to `.v2` so existing call sites keep exactly today's behaviour; pass
+    /// the discovered peer's version to get `ApiRoute.target`'s per-peer routing
+    /// (`common/lib/api_route_builder.dart:28-36`).
+    public func makeClient(
+        host: String,
+        port: Int,
+        protocolType: ProtocolType,
+        fingerprint: String,
+        apiVersion: LocalSendKit.APIVersion = .v2
+    ) -> LocalSendClient {
         LocalSendClient(
-            peer: RemotePeer(host: host, port: port, protocolType: protocolType),
+            peer: RemotePeer(host: host, port: port, protocolType: protocolType, apiVersion: apiVersion),
             expectedFingerprint: fingerprint,
             timeoutConfiguration: timeoutConfiguration
         )
@@ -171,14 +180,17 @@ public final class LocalSendNode: @unchecked Sendable {
                 // resolves an absent port to the receiver's own, so the shared default port is the
                 // faithful fallback.
                 let peerPort = peer.info.port ?? Int(runtimeConfiguration.multicastPort)
+                // The version goes onto the client's peer, not just onto the `register` call: the
+                // same routing rule governs every later request to this device
+                // (`common/lib/api_route_builder.dart:28-36`).
+                let apiVersion = LocalSendKit.APIVersion(protocolVersion: peer.info.version)
                 let client = clientFactory.makeClient(
                     host: peer.host,
                     port: peerPort,
                     protocolType: peer.info.protocolType ?? .https,
-                    fingerprint: peer.info.fingerprint
+                    fingerprint: peer.info.fingerprint,
+                    apiVersion: apiVersion
                 )
-                let apiVersion: LocalSendKit.APIVersion =
-                    peer.info.version == LocalSendKit.fallbackProtocolVersion ? .v1 : .v2
                 do {
                     _ = try await client.register(with: localInfo, apiVersion: apiVersion)
                     logger.emit(
@@ -327,21 +339,15 @@ public final class LocalSendNode: @unchecked Sendable {
         await runtimeStateStore.currentSnapshot()
     }
 
-    public func incomingTransferRequests() async -> AsyncStream<IncomingTransferRequest> {
+    /// Prompts and the network-side withdrawals of those prompts (sender-initiated `/cancel` during
+    /// the accept/decline prompt), on ONE ordered stream.
+    ///
+    /// The single stream is the ordering guarantee: a `.withdrawal` can only ever follow the
+    /// `.request` it refers to, and carrying both on the same continuation set is what preserves
+    /// that for every consumer. See `IncomingTransferRequestBridge.events()`.
+    public func incomingTransferRequestEvents() async -> AsyncStream<IncomingTransferRequestEvent> {
         if let incomingRequestBridge = runtimeConfiguration.incomingRequestBridge {
-            return await incomingRequestBridge.requests()
-        }
-        return AsyncStream { continuation in
-            continuation.finish()
-        }
-    }
-
-    /// Ids of prompts withdrawn by the network side (sender-initiated `/cancel` during the
-    /// accept/decline prompt). Additive to `incomingTransferRequests()` so that stream's element
-    /// type — and every consumer of it — is untouched.
-    public func incomingTransferRequestWithdrawals() async -> AsyncStream<String> {
-        if let incomingRequestBridge = runtimeConfiguration.incomingRequestBridge {
-            return await incomingRequestBridge.withdrawals()
+            return await incomingRequestBridge.events()
         }
         return AsyncStream { continuation in
             continuation.finish()
@@ -358,8 +364,20 @@ public final class LocalSendNode: @unchecked Sendable {
         try await incomingRequestBridge.respond(to: requestID, decision: decision)
     }
 
-    public func makeClient(host: String, port: Int, protocolType: ProtocolType, fingerprint: String) -> LocalSendClient {
-        clientFactory.makeClient(host: host, port: port, protocolType: protocolType, fingerprint: fingerprint)
+    public func makeClient(
+        host: String,
+        port: Int,
+        protocolType: ProtocolType,
+        fingerprint: String,
+        apiVersion: LocalSendKit.APIVersion = .v2
+    ) -> LocalSendClient {
+        clientFactory.makeClient(
+            host: host,
+            port: port,
+            protocolType: protocolType,
+            fingerprint: fingerprint,
+            apiVersion: apiVersion
+        )
     }
 
     /// Tears down the live receive session because the LOCAL user cancelled it, and publishes the

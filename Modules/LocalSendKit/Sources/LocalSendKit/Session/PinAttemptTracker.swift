@@ -21,9 +21,19 @@ public actor PinAttemptTracker {
     ///
     /// One deliberate divergence: an `expectedPIN` of `""` is treated as "no PIN configured" and
     /// allows everything, whereas the reference's `if (pin != null)` would enforce the empty string
-    /// literally and reject every sender that did not send `?pin=`. The settings UI cannot produce
-    /// an empty configured PIN, and "no PIN required" is the recoverable outcome, so this is not
-    /// changed — but it is not the reference's semantics.
+    /// literally and reject every sender that did not send `?pin=`. It is kept because "no PIN
+    /// required" is the recoverable outcome of the two — the alternative locks the user's own
+    /// senders out of a receiver they cannot fix from the sending side.
+    ///
+    /// It is also unreachable in this app, but NOT because of anything on
+    /// `TransferProtocolSettings` itself: `incomingPIN` is a plain `var` with no `didSet`, and
+    /// `TransferFeatureContainer.testing(incomingPIN:)` writes it directly, so neither the
+    /// initializer nor the decode normalizer is the load-bearing guard. What actually holds the
+    /// invariant is `TransferFeatureStore.resolvedIncomingPIN`, which substitutes a freshly
+    /// generated PIN for any non-conforming value on the way into `currentProtocolSettings`, plus
+    /// the initial runtime configuration at `TransferFeatureContainer.swift:414/427`, which reads a
+    /// snapshot that came through the normalizing decode. Both feed
+    /// `LocalSendServerConfiguration.pin`, so the empty string never reaches `expectedPIN`.
     public func validate(ipAddress: String, providedPIN: String?, expectedPIN: String?) -> ValidationResult {
         guard let expectedPIN, expectedPIN.isEmpty == false else {
             return .allowed

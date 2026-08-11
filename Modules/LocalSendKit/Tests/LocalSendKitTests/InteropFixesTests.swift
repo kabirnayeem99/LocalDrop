@@ -237,7 +237,11 @@ struct CancelDuringPromptTests {
     @Test func cancelWithdrawsThePromptAndLeavesTheReceiverReusable() async throws {
         let bridge = IncomingTransferRequestBridge()
         let server = makeServer(storageDirectory: makeStorageDirectory(), bridge: bridge)
-        var withdrawals = await bridge.withdrawals().makeAsyncIterator()
+        // Created before the first request, so the prompt itself lands in it too — and the pair of
+        // assertions below therefore pins the relative ORDER, not merely the fact of a withdrawal.
+        // The second transfer at the end lands in this same iterator; anything asserted there has
+        // to account for the extra `.request`.
+        var events = await bridge.events().makeAsyncIterator()
 
         async let firstOutcome = server.handle(try prepareUploadRequest(from: "10.0.0.5"))
         let prompt = try await waitForPrompt(on: bridge)
@@ -247,7 +251,8 @@ struct CancelDuringPromptTests {
         #expect(cancel.statusCode == 200)
 
         #expect(try await firstOutcome.statusCode == 403)
-        #expect(await withdrawals.next() == prompt.id)
+        #expect(await events.next() == .request(prompt))
+        #expect(await events.next() == .withdrawal(requestID: prompt.id))
         #expect(await bridge.currentRequest() == nil)
         #expect(await server.receiveSnapshot() == nil)
 
@@ -318,26 +323,69 @@ struct CancelDuringPromptTests {
         }
     }
 
-    /// A cancel must not go through `finishPending`: that finishes every `requests()` continuation
+    /// A cancel must not go through `finishPending`: that finishes every `events()` continuation
     /// and clears them, permanently killing the stream the app's prompt is bound to.
     @Test func withdrawalKeepsTheRequestStreamAlive() async throws {
         let bridge = IncomingTransferRequestBridge()
         let server = makeServer(storageDirectory: makeStorageDirectory(), bridge: bridge)
-        var requests = await bridge.requests().makeAsyncIterator()
+        var events = await bridge.events().makeAsyncIterator()
 
         async let firstOutcome = server.handle(try prepareUploadRequest(from: "10.0.0.5"))
         let first = try await waitForPrompt(on: bridge)
-        #expect(await requests.next()?.id == first.id)
+        #expect(await nextRequest(from: &events)?.id == first.id)
         _ = try await server.handle(cancelRequest(from: "10.0.0.5"))
         _ = try await firstOutcome
 
         async let secondOutcome = server.handle(try prepareUploadRequest(from: "10.0.0.5"))
         let second = try await waitForPrompt(on: bridge)
-        // The same stream must still deliver the next prompt.
-        #expect(await requests.next()?.id == second.id)
+        // The same stream must still deliver the next prompt — past the interleaved `.withdrawal`.
+        #expect(await nextRequest(from: &events)?.id == second.id)
         try await bridge.respond(to: second.id, decision: .acceptAll)
         _ = try await secondOutcome
     }
+
+    /// The ordering guarantee lives at the source, so it is asserted at the source rather than only
+    /// three hops downstream in the feature store: one continuation set means a `.withdrawal` can
+    /// never be delivered before, or without, the `.request` it refers to.
+    ///
+    /// Asserted for a subscriber attached BEFORE the request (live delivery) and one attached
+    /// BETWEEN the request and the cancel, which exercises the `activeRequest` replay path.
+    @Test func eventsDeliverAWithdrawalDirectlyAfterItsRequest() async throws {
+        let bridge = IncomingTransferRequestBridge()
+        let server = makeServer(storageDirectory: makeStorageDirectory(), bridge: bridge)
+        var early = await bridge.events().makeAsyncIterator()
+
+        async let outcome = server.handle(try prepareUploadRequest(from: "10.0.0.5"))
+        let prompt = try await waitForPrompt(on: bridge)
+
+        var late = await bridge.events().makeAsyncIterator()
+
+        let cancel = try await server.handle(cancelRequest(from: "10.0.0.5"))
+        #expect(cancel.statusCode == 200)
+        #expect(try await outcome.statusCode == 403)
+
+        #expect(await early.next() == .request(prompt))
+        #expect(await early.next() == .withdrawal(requestID: prompt.id))
+        #expect(await late.next() == .request(prompt))
+        #expect(await late.next() == .withdrawal(requestID: prompt.id))
+    }
+}
+
+/// Pulls at most `limit` events looking for a `.request`, skipping `.withdrawal`s, and fails the
+/// test rather than hanging if none arrives. Needed because `events()` is one merged stream: a bare
+/// `next()` would trip over an interleaved withdrawal.
+private func nextRequest(
+    from iterator: inout AsyncStream<IncomingTransferRequestEvent>.Iterator,
+    limit: Int = 8
+) async -> IncomingTransferRequest? {
+    for _ in 0..<limit {
+        guard let event = await iterator.next() else { break }
+        if case .request(let request) = event {
+            return request
+        }
+    }
+    Issue.record("Expected a .request within \(limit) events")
+    return nil
 }
 
 // MARK: - P6: folder transfers + path traversal

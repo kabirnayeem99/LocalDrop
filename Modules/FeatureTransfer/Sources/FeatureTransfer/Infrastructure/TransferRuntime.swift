@@ -69,11 +69,14 @@ protocol TransferRuntime: Sendable {
     func stop() async
     func refreshDiscovery() async
     func discoveredPeers() async -> AsyncStream<[NearbyPeerItem]>
-    func inboundRequests() async -> AsyncStream<IncomingTransferRequest>
-    /// Ids of inbound prompts withdrawn by the network side (the sender canceled while the
-    /// accept/decline prompt was still on screen) rather than answered by the user. Additive to
-    /// `inboundRequests()` so that stream's element type is untouched.
-    func inboundRequestWithdrawals() async -> AsyncStream<String>
+    /// Inbound prompts and the network-side withdrawals of those prompts (the sender canceled while
+    /// the accept/decline prompt was still on screen) rather than answered by the user — on ONE
+    /// ordered stream.
+    ///
+    /// One stream, not two: a withdrawal can only ever be produced for a request that was already
+    /// produced, so a single consumer preserves that order end to end. Two streams consumed by two
+    /// tasks would reorder them and require the receiver to compensate.
+    func inboundRequestEvents() async -> AsyncStream<InboundRequestEvent>
     func progressEvents() async -> AsyncStream<TransferProgressEvent>
     func updateSettings(_ settings: TransferProtocolSettings) async throws
     func stage(_ items: [StagedTransferItem]) async
